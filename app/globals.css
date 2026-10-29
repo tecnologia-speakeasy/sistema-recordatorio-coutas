@@ -1,26 +1,31 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * Marca Speak Easy: morado #41276B y fucsia #FF327D (confirmados).
+ * Los tonos "oscuro"/"claro" son derivados de implementación:
+ *  - fucsia-oscuro #D6145F: fondo de botones con texto blanco (contraste 5,1:1; el
+ *    fucsia original con blanco da 3,5:1, insuficiente para texto pequeño).
+ */
+@theme {
+  --color-morado: #41276b;
+  --color-morado-oscuro: #2e1a4d;
+  --color-morado-claro: #efeaf6;
+  --color-fucsia: #ff327d;
+  --color-fucsia-oscuro: #d6145f;
+  --color-fucsia-claro: #ffe4ee;
+  --color-lienzo: #f6f4f9;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-montserrat), Arial, sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-lienzo);
+  color: #1f1530;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-fucsia);
+  outline-offset: 2px;
 }

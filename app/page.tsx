@@ -1,69 +1,184 @@
-import Image from "next/image";
+import { io } from "next/cache";
+import { Suspense } from "react";
+import { z } from "zod";
+import { ejecutarCicloAhora, reenviarFallidos, sincronizarSheetsAhora } from "@/app/acciones";
+import { configGeneral, modoSimulacion } from "@/lib/config";
+import {
+  ejecucionesRecientes,
+  kpis,
+  listarEnvios,
+  listarEtapas,
+  type FiltrosEnvios,
+} from "@/lib/recordatorios/consultas";
+import { ESTADOS_ENVIO } from "@/lib/recordatorios/tipos";
+import { formatearFechaCorta, hoyEnZona, mensajeDeError, sumarDias } from "@/lib/utilidades";
+import { BotonAccion } from "./componentes/boton-accion";
+import { Ejecuciones } from "./componentes/ejecuciones";
+import { Filtros } from "./componentes/filtros";
+import { FormularioEtapa } from "./componentes/formulario-etapa";
+import { TablaEnvios } from "./componentes/tabla-envios";
+import { TarjetasKpi } from "./componentes/tarjetas-kpi";
 
-export default function Home() {
+// Aplica también a las server actions de la página (reenvíos masivos, ciclo manual).
+export const maxDuration = 300;
+
+const esquemaBusqueda = z.object({
+  desde: z.iso.date().optional().catch(undefined),
+  hasta: z.iso.date().optional().catch(undefined),
+  estado: z.enum(ESTADOS_ENVIO).optional().catch(undefined),
+  etapa: z.string().max(10).optional().catch(undefined),
+  q: z.string().max(100).optional().catch(undefined),
+  pagina: z.coerce.number().int().min(1).optional().catch(undefined),
+});
+
+export default function Inicio(props: PageProps<"/">) {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <Suspense fallback={<p className="py-20 text-center text-sm text-neutral-600">Cargando panel…</p>}>
+      <Panel searchParams={props.searchParams} />
+    </Suspense>
+  );
+}
+
+async function Panel({ searchParams }: { searchParams: PageProps<"/">["searchParams"] }) {
+  const busqueda = esquemaBusqueda.parse(await searchParams);
+
+  let general: ReturnType<typeof configGeneral>;
+  try {
+    general = configGeneral();
+  } catch (error) {
+    return <Aviso titulo="Falta configuración" mensaje={mensajeDeError(error)} />;
+  }
+
+  // "Hoy" depende del reloj: se calcula por request, nunca en el shell prerenderizado.
+  await io();
+  const hoy = hoyEnZona(general.APP_TIMEZONE);
+  const filtros: FiltrosEnvios = {
+    desde: busqueda.desde ?? sumarDias(hoy, -30),
+    hasta: busqueda.hasta ?? hoy,
+    estado: busqueda.estado,
+    etapa: busqueda.etapa || undefined,
+    q: busqueda.q?.trim() || undefined,
+    pagina: busqueda.pagina ?? 1,
+  };
+
+  const datos = await Promise.all([
+    kpis(filtros.desde, filtros.hasta),
+    listarEnvios(filtros),
+    ejecucionesRecientes(),
+    listarEtapas(),
+  ]).catch((error: unknown) => new Error(mensajeDeError(error)));
+
+  if (datos instanceof Error) {
+    return (
+      <Aviso titulo="No se pudo leer la base de datos" mensaje={`${datos.message}. ¿Ejecutaste "npm run db:migrar"?`} />
+    );
+  }
+
+  const [resumen, envios, ejecuciones, etapas] = datos;
+  const simulacion = modoSimulacion();
+  const etapasSinWorkflow = etapas.filter((e) => e.activa && !e.ghl_workflow_id).map((e) => e.codigo);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <section className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-morado">Envíos de recordatorios</h1>
+          <p className="text-sm text-neutral-600">
+            Hoy: {formatearFechaCorta(hoy)} · Ventana de envío {general.HORA_INICIO_ENVIO}:00–{general.HORA_FIN_ENVIO}:00 (
+            {general.APP_TIMEZONE})
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="flex flex-wrap items-start gap-3">
+          <BotonAccion
+            accion={sincronizarSheetsAhora}
+            etiqueta="Sincronizar Sheets"
+            etiquetaPendiente="Sincronizando…"
+            variante="secundario"
+          />
+          <BotonAccion
+            accion={ejecutarCicloAhora}
+            etiqueta="Ejecutar ciclo ahora"
+            etiquetaPendiente="Ejecutando…"
+            confirmar="Se planificarán y enviarán los recordatorios de hoy, aunque esté fuera de la ventana horaria. ¿Continuar?"
+          />
         </div>
-      </main>
+      </section>
+
+      {simulacion && (
+        <Aviso
+          tono="info"
+          titulo="Modo simulación activo"
+          mensaje="GHL_DRY_RUN=true: los envíos se marcan como enviados sin llamar a GHL."
+        />
+      )}
+      {etapasSinWorkflow.length > 0 && (
+        <Aviso
+          tono="info"
+          titulo="Etapas activas sin workflow"
+          mensaje={`Configura el ID del workflow de GHL para: ${etapasSinWorkflow.join(", ")}. Sus envíos fallarán hasta entonces.`}
+        />
+      )}
+
+      <TarjetasKpi kpis={resumen} />
+
+      <section aria-labelledby="titulo-envios" className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-morado/10 sm:p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 id="titulo-envios" className="text-lg font-bold text-morado">
+            Envíos
+          </h2>
+          {resumen.porEstado.fallido > 0 && (
+            <BotonAccion
+              accion={reenviarFallidos}
+              campos={{ desde: filtros.desde, hasta: filtros.hasta, etapa: filtros.etapa, q: filtros.q }}
+              etiqueta="Reenviar fallidos del filtro"
+              etiquetaPendiente="Reenviando…"
+              confirmar="Se reenviarán hasta 200 envíos fallidos que coinciden con el rango, la etapa y la búsqueda actuales. ¿Continuar?"
+            />
+          )}
+        </div>
+        <Filtros filtros={filtros} etapas={etapas} />
+        <div className="mt-5">
+          <TablaEnvios
+            filas={envios.filas}
+            total={envios.total}
+            filtros={filtros}
+            zona={general.APP_TIMEZONE}
+            moneda={general.MONEDA}
+          />
+        </div>
+      </section>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section aria-labelledby="titulo-ejecuciones" className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-morado/10 sm:p-6">
+          <h2 id="titulo-ejecuciones" className="mb-2 text-lg font-bold text-morado">
+            Últimas ejecuciones
+          </h2>
+          <Ejecuciones ejecuciones={ejecuciones} zona={general.APP_TIMEZONE} />
+        </section>
+        <section aria-labelledby="titulo-etapas" className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-morado/10 sm:p-6">
+          <h2 id="titulo-etapas" className="text-lg font-bold text-morado">
+            Etapas y workflows de GHL
+          </h2>
+          <p className="mb-3 text-xs text-neutral-600">
+            Días relativos al vencimiento. Cada etapa inscribe al contacto en su workflow (puede ser el mismo para todas).
+          </p>
+          <div className="flex flex-col gap-3">
+            {etapas.map((etapa) => (
+              <FormularioEtapa key={etapa.codigo} etapa={etapa} />
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function Aviso({ titulo, mensaje, tono = "error" }: { titulo: string; mensaje: string; tono?: "error" | "info" }) {
+  const estilos = tono === "error" ? "bg-red-50 text-red-900 ring-red-200" : "bg-fucsia-claro text-morado-oscuro ring-fucsia/30";
+  return (
+    <div role={tono === "error" ? "alert" : "status"} className={`rounded-2xl p-4 ring-1 ${estilos}`}>
+      <p className="font-semibold">{titulo}</p>
+      <p className="mt-1 text-sm break-words">{mensaje}</p>
     </div>
   );
 }
