@@ -66,10 +66,24 @@ const rango = (pestana: string, celdas: string) => encodeURIComponent(a1(pestana
 
 export type Celda = string | number | null;
 
-export async function asegurarEncabezados(pestana: string, encabezados: string[]): Promise<void> {
-  const { values } = await llamar<{ values?: Celda[][] }>("GET", `/values/${rango(pestana, "A1:A1")}`);
-  if (values?.[0]?.[0]) return;
-  await llamar("PUT", `/values/${rango(pestana, "A1")}?valueInputOption=RAW`, { values: [encabezados] });
+/** Crea las pestañas que falten y deja la fila 1 con los encabezados actuales. */
+export async function asegurarPestanas(nombres: string[], encabezados: string[]): Promise<void> {
+  const unicas = [...new Set(nombres)];
+  if (!unicas.length) return;
+
+  const { sheets } = await llamar<{ sheets: { properties: { title: string } }[] }>("GET", "?fields=sheets.properties.title");
+  const existentes = new Set(sheets.map((h) => h.properties.title));
+  const faltantes = unicas.filter((n) => !existentes.has(n));
+  if (faltantes.length) {
+    await llamar("POST", ":batchUpdate", {
+      requests: faltantes.map((title) => ({ addSheet: { properties: { title, gridProperties: { frozenRowCount: 1 } } } })),
+    });
+  }
+
+  await llamar("POST", "/values:batchUpdate", {
+    valueInputOption: "RAW",
+    data: unicas.map((pestana) => ({ range: a1(pestana, "A1"), values: [encabezados] })),
+  });
 }
 
 /** Agrega filas al final y devuelve el número de fila asignado a cada una. */
@@ -84,11 +98,11 @@ export async function anexarFilas(pestana: string, filas: Celda[][]): Promise<nu
   return filas.map((_, i) => inicio + i);
 }
 
-export async function actualizarFilas(pestana: string, filas: { fila: number; valores: Celda[] }[]): Promise<void> {
+export async function actualizarFilas(filas: { pestana: string; fila: number; valores: Celda[] }[]): Promise<void> {
   if (!filas.length) return;
   await llamar("POST", "/values:batchUpdate", {
     valueInputOption: "RAW",
-    data: filas.map(({ fila, valores }) => ({
+    data: filas.map(({ pestana, fila, valores }) => ({
       range: a1(pestana, `A${fila}`),
       values: [valores],
     })),

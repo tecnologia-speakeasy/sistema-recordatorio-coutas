@@ -4,37 +4,57 @@ import { useActionState } from "react";
 import { guardarEtapa } from "@/app/acciones";
 import type { Etapa } from "@/lib/recordatorios/tipos";
 
-export function FormularioEtapa({ etapa }: { etapa: Etapa }) {
+function cuando(etapa: Etapa, horasSeguimiento: number) {
+  if (etapa.offset_dias === null) return `${horasSeguimiento} h después del clic en el link`;
+  if (etapa.offset_dias === 0) return "el día 20";
+  const dias = Math.abs(etapa.offset_dias);
+  return `${dias} día${dias === 1 ? "" : "s"} ${etapa.offset_dias < 0 ? "antes" : "después"} del 20`;
+}
+
+export function FormularioEtapa({ etapa, horasSeguimiento }: { etapa: Etapa; horasSeguimiento: number }) {
   const [estado, guardar, pendiente] = useActionState(guardarEtapa, null);
-  const idCampo = `workflow-${etapa.codigo}`;
+  const idCampo = `webhook-${etapa.codigo}`;
   const idActiva = `activa-${etapa.codigo}`;
 
   return (
-    <form action={guardar} className="grid gap-3 rounded-2xl border border-morado/10 p-4 sm:grid-cols-[8rem_1fr_auto_auto] sm:items-end">
+    <form action={guardar} className="grid gap-3 rounded-2xl border border-morado/10 p-4">
       <input type="hidden" name="codigo" value={etapa.codigo} />
-      <div>
-        <p className="text-sm font-bold text-morado">{etapa.codigo}</p>
-        <p className="text-xs text-neutral-600">
-          {etapa.nombre} ({etapa.offset_dias > 0 ? `+${etapa.offset_dias}` : etapa.offset_dias} d)
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-bold text-morado">
+            {etapa.codigo} · {etapa.nombre}
+          </p>
+          <p className="text-xs text-neutral-600">
+            Sale {cuando(etapa, horasSeguimiento)}
+            {etapa.plantilla ? (
+              <>
+                {" "}
+                · plantilla <code>{etapa.plantilla}</code>
+              </>
+            ) : (
+              " · mensaje normal (sin plantilla)"
+            )}
+          </p>
+        </div>
+        <label htmlFor={idActiva} className="flex items-center gap-2 text-sm font-medium">
+          <input id={idActiva} type="checkbox" name="activa" defaultChecked={etapa.activa} className="size-4 accent-fucsia-oscuro" />
+          Activa
+        </label>
       </div>
       <div className="flex flex-col gap-1">
         <label htmlFor={idCampo} className="text-xs font-semibold text-neutral-700">
-          ID del workflow en GHL
+          URL del webhook entrante del workflow (disparador Inbound Webhook)
         </label>
         <input
           id={idCampo}
-          name="ghl_workflow_id"
-          defaultValue={etapa.ghl_workflow_id ?? ""}
-          placeholder="Sin configurar"
-          className="rounded-xl border border-neutral-300 px-3 py-2 font-mono text-sm"
+          name="ghl_webhook_url"
+          type="url"
+          defaultValue={etapa.ghl_webhook_url ?? ""}
+          placeholder="https://services.leadconnectorhq.com/hooks/…"
+          className="rounded-xl border border-neutral-300 px-3 py-2 font-mono text-xs"
         />
       </div>
-      <label htmlFor={idActiva} className="flex items-center gap-2 text-sm font-medium">
-        <input id={idActiva} type="checkbox" name="activa" defaultChecked={etapa.activa} className="size-4 accent-fucsia-oscuro" />
-        Activa
-      </label>
-      <div className="flex flex-col items-start gap-1">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"
           disabled={pendiente}

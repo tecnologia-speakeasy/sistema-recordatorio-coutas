@@ -1,8 +1,7 @@
 import Form from "next/form";
 import Link from "next/link";
 import type { FiltrosEnvios } from "@/lib/recordatorios/consultas";
-import { ESTADOS_ENVIO, type Etapa } from "@/lib/recordatorios/tipos";
-import { ETIQUETAS_ESTADO } from "./insignia-estado";
+import { ESTADOS_ENVIO, ETIQUETAS_ESTADO, type Etapa } from "@/lib/recordatorios/tipos";
 
 const campo = "rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm";
 const etiqueta = "flex flex-col gap-1 text-xs font-semibold text-neutral-700";
@@ -46,7 +45,7 @@ export function Filtros({ filtros, etapas }: { filtros: FiltrosEnvios; etapas: E
           type="search"
           name="q"
           defaultValue={filtros.q ?? ""}
-          placeholder="Nombre, teléfono, cuota o cliente"
+          placeholder="Nombre, teléfono o correo"
           className={campo}
         />
       </label>

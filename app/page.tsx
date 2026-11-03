@@ -2,20 +2,28 @@ import { io } from "next/cache";
 import { Suspense } from "react";
 import { z } from "zod";
 import { ejecutarCicloAhora, reenviarFallidos, sincronizarSheetsAhora } from "@/app/acciones";
-import { configGeneral, modoSimulacion } from "@/lib/config";
+import { apiGhlConfigurada, configGeneral, modoSimulacion } from "@/lib/config";
 import {
+  alertas,
   ejecucionesRecientes,
   kpis,
   listarEnvios,
   listarEtapas,
+  listarLanzamientos,
+  leerLinkSoporte,
+  listarProductos,
+  planesSinLink,
   type FiltrosEnvios,
 } from "@/lib/recordatorios/consultas";
-import { ESTADOS_ENVIO } from "@/lib/recordatorios/tipos";
+import { ESTADOS_ENVIO, PASARELAS } from "@/lib/recordatorios/tipos";
 import { formatearFechaCorta, hoyEnZona, mensajeDeError, sumarDias } from "@/lib/utilidades";
+import { Alertas } from "./componentes/alertas";
 import { BotonAccion } from "./componentes/boton-accion";
 import { Ejecuciones } from "./componentes/ejecuciones";
 import { Filtros } from "./componentes/filtros";
+import { FormularioAjustes } from "./componentes/formulario-ajustes";
 import { FormularioEtapa } from "./componentes/formulario-etapa";
+import { FormularioProducto } from "./componentes/formulario-producto";
 import { TablaEnvios } from "./componentes/tabla-envios";
 import { TarjetasKpi } from "./componentes/tarjetas-kpi";
 
@@ -66,6 +74,11 @@ async function Panel({ searchParams }: { searchParams: PageProps<"/">["searchPar
     listarEnvios(filtros),
     ejecucionesRecientes(),
     listarEtapas(),
+    listarProductos(),
+    planesSinLink(hoy).catch(() => []),
+    listarLanzamientos().catch(() => []),
+    alertas(filtros.desde, filtros.hasta, hoy),
+    leerLinkSoporte(),
   ]).catch((error: unknown) => new Error(mensajeDeError(error)));
 
   if (datos instanceof Error) {
@@ -74,9 +87,16 @@ async function Panel({ searchParams }: { searchParams: PageProps<"/">["searchPar
     );
   }
 
-  const [resumen, envios, ejecuciones, etapas] = datos;
+  const [resumen, envios, ejecuciones, etapas, productos, sinLink, lanzamientos, atencion, linkSoporte] = datos;
   const simulacion = modoSimulacion();
-  const etapasSinWorkflow = etapas.filter((e) => e.activa && !e.ghl_workflow_id).map((e) => e.codigo);
+  const etapasSinWebhook = etapas.filter((e) => e.activa && !e.ghl_webhook_url).map((e) => e.codigo);
+  const verificaEntregas = (() => {
+    try {
+      return apiGhlConfigurada();
+    } catch {
+      return false;
+    }
+  })();
 
   return (
     <div className="flex flex-col gap-6">
@@ -111,15 +131,42 @@ async function Panel({ searchParams }: { searchParams: PageProps<"/">["searchPar
           mensaje="GHL_DRY_RUN=true: los envíos se marcan como enviados sin llamar a GHL."
         />
       )}
-      {etapasSinWorkflow.length > 0 && (
+      {etapasSinWebhook.length > 0 && (
         <Aviso
           tono="info"
-          titulo="Etapas activas sin workflow"
-          mensaje={`Configura el ID del workflow de GHL para: ${etapasSinWorkflow.join(", ")}. Sus envíos fallarán hasta entonces.`}
+          titulo="Etapas activas sin webhook"
+          mensaje={`Pega la URL del webhook entrante del workflow de GHL para: ${etapasSinWebhook.join(", ")}. Sus envíos fallarán hasta entonces.`}
+        />
+      )}
+      {sinLink.length > 0 && (
+        <Aviso
+          titulo="Planes sin link de pago"
+          mensaje={`Sus recordatorios fallarán hasta que configures el link: ${sinLink
+            .map(
+              (p) =>
+                `${PASARELAS[p.pasarela]}${p.referido ? " referido" : ""} · ${p.total_cuotas} cuotas (${p.estudiantes} estudiantes)`,
+            )
+            .join(", ")}.`}
+        />
+      )}
+      {!linkSoporte && (
+        <Aviso
+          tono="info"
+          titulo="Falta el link del chat de soporte"
+          mensaje="Configúralo en «Etapas y workflows de GHL». Mientras tanto, el botón del mensaje de soporte llega sin link."
+        />
+      )}
+      {!verificaEntregas && (
+        <Aviso
+          tono="info"
+          titulo="Sin verificación de entrega"
+          mensaje="Sin GHL_TOKEN y GHL_LOCATION_ID los envíos se quedan en «Enviado»: no se detectan los WhatsApp que fallan después de llegar a GHL."
         />
       )}
 
       <TarjetasKpi kpis={resumen} />
+
+      <Alertas alertas={atencion} filtros={filtros} zona={general.APP_TIMEZONE} />
 
       <section aria-labelledby="titulo-envios" className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-morado/10 sm:p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -143,7 +190,6 @@ async function Panel({ searchParams }: { searchParams: PageProps<"/">["searchPar
             total={envios.total}
             filtros={filtros}
             zona={general.APP_TIMEZONE}
-            moneda={general.MONEDA}
           />
         </div>
       </section>
@@ -160,15 +206,33 @@ async function Panel({ searchParams }: { searchParams: PageProps<"/">["searchPar
             Etapas y workflows de GHL
           </h2>
           <p className="mb-3 text-xs text-neutral-600">
-            Días relativos al vencimiento. Cada etapa inscribe al contacto en su workflow (puede ser el mismo para todas).
+            Cada etapa dispara su workflow con un POST a su webhook entrante. Los datos llegan como{" "}
+            <code>{"{{inboundWebhookRequest.campo}}"}</code>.
           </p>
           <div className="flex flex-col gap-3">
+            <FormularioAjustes linkSoporte={linkSoporte} />
             {etapas.map((etapa) => (
-              <FormularioEtapa key={etapa.codigo} etapa={etapa} />
+              <FormularioEtapa key={etapa.codigo} etapa={etapa} horasSeguimiento={general.SEGUIMIENTO_HORAS} />
             ))}
           </div>
         </section>
       </div>
+
+      <section aria-labelledby="titulo-productos" className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-morado/10 sm:p-6">
+        <h2 id="titulo-productos" className="text-lg font-bold text-morado">
+          Productos y links de pago
+        </h2>
+        <p className="mb-3 text-xs text-neutral-600">
+          El link se elige por el método de pago de la compra (Stripe → Stripe; los demás → Hotmart), por su plan de
+          cuotas y por si tiene descuento de referido. El estudiante recibe un link rastreado que redirige al de esta
+          tabla.
+        </p>
+        <div className="flex flex-col gap-3">
+          {productos.map((producto) => (
+            <FormularioProducto key={producto.producto_id} producto={producto} lanzamientos={lanzamientos} />
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

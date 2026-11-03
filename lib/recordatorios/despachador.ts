@@ -1,17 +1,15 @@
 import "server-only";
 import { configGeneral, configGhl } from "../config";
 import { consultar, consultarUno } from "../db";
-import { ErrorGhl, inscribirEnWorkflow, upsertContacto } from "../ghl";
-import {
-  esperar,
-  formatearFechaLarga,
-  formatearMoneda,
-  mensajeDeError,
-  normalizarTelefono,
-} from "../utilidades";
+import { dispararWorkflow, ErrorGhl, type DatosWorkflow } from "../ghl";
+import { normalizarTelefono } from "../telefonos";
+import { esperar, esUrlHttp, formatearFechaLarga, mensajeDeError, primerNombre } from "../utilidades";
 import { registrarEvento } from "./bitacora";
+import { leerAjustes, pagoReportado, ventanaCerrada } from "./interacciones";
 import {
   ESTADOS_REENVIABLES,
+  ETAPA_SEGUIMIENTO,
+  PASARELAS,
   type CuotaFuente,
   type Envio,
   type Etapa,
@@ -19,7 +17,7 @@ import {
 } from "./tipos";
 
 const TAMANO_LOTE = 20;
-const CONCURRENCIA = 4; // ~2 llamadas a GHL por envío; holgado bajo 100 req / 10 s
+const CONCURRENCIA = 4; // una llamada a GHL por envío
 
 type Desenlace = "enviado" | "fallido" | "omitido";
 
@@ -34,7 +32,7 @@ export type Alcance = { fecha: string; ids?: never } | { ids: string[]; fecha?: 
 export async function despacharPendientes(alcance: Alcance, limiteMs: number): Promise<ResultadoDespacho> {
   const general = configGeneral();
   const fin = Date.now() + limiteMs;
-  const etapas = await cargarEtapas();
+  const contexto: Contexto = { etapas: await cargarEtapas(), ajustes: await leerAjustes() };
   const resultado: ResultadoDespacho = { enviados: 0, fallidos: 0, omitidos: 0 };
 
   while (Date.now() < fin) {
@@ -49,7 +47,7 @@ export async function despacharPendientes(alcance: Alcance, limiteMs: number): P
       continue;
     }
 
-    const desenlaces = await enParalelo(lote, CONCURRENCIA, (envio) => despacharEnvio(envio, etapas));
+    const desenlaces = await enParalelo(lote, CONCURRENCIA, (envio) => despacharEnvio(envio, contexto));
     for (const d of desenlaces) {
       if (d === "enviado") resultado.enviados++;
       else if (d === "fallido") resultado.fallidos++;
@@ -92,14 +90,31 @@ export async function marcarParaReenvio(ids: string[]): Promise<string[]> {
 
 // ---------------------------------------------------------------------------
 
-/** $1 = fecha (cron) o $2 = ids (reenvío); exactamente uno de los dos viene informado. */
-const FILTRO_ALCANCE = `(CASE WHEN $2::bigint[] IS NULL THEN e.fecha_programada = $1::date
-                              ELSE e.id = ANY($2::bigint[]) END)`;
+/**
+ * $1 = fecha (cron) o $2 = ids (reenvío); exactamente uno de los dos viene informado.
+ * En el cron, los recordatorios salen en su fecha y los seguimientos cuando llega
+ * su hora (si quedó fuera de la ventana, en la siguiente ejecución dentro de ella).
+ */
+const FILTRO_ALCANCE = `(CASE WHEN $2::bigint[] IS NOT NULL THEN e.id = ANY($2::bigint[])
+                              WHEN e.programado_para IS NULL THEN e.fecha_programada = $1::date
+                              ELSE e.programado_para <= now() AND e.programado_para > now() - interval '1 day' END)`;
+
+/** Lo que todos los envíos de una ejecución comparten. */
+interface Contexto {
+  etapas: Map<string, Etapa>;
+  ajustes: Awaited<ReturnType<typeof leerAjustes>>;
+}
 
 async function cargarEtapas(): Promise<Map<string, Etapa>> {
   const etapas = await consultar<Etapa>("SELECT * FROM recordatorios.etapas");
   return new Map(etapas.map((e) => [e.codigo, e]));
 }
+
+/**
+ * Mismo teléfono aunque cartera lo tenga en formatos distintos ("1 (305) 555-1001",
+ * "+1 305 555 1001"): últimos 10 dígitos. Un falso positivo solo retrasa el envío.
+ */
+const claveTelefono = (alias: string) => `NULLIF(right(regexp_replace(${alias}.telefono, '\\D', '', 'g'), 10), '')`;
 
 /**
  * Toma hasta TAMANO_LOTE pendientes, uno por teléfono, excluyendo teléfonos con
@@ -110,16 +125,16 @@ async function cargarEtapas(): Promise<Map<string, Etapa>> {
 async function reclamarLote(alcance: Alcance, esperaSeg: number): Promise<Envio[]> {
   return consultar<Envio>(
     `WITH candidatos AS (
-       SELECT DISTINCT ON (COALESCE(e.telefono, e.id::text)) e.id
+       SELECT DISTINCT ON (COALESCE(${claveTelefono("e")}, e.id::text)) e.id
        FROM recordatorios.envios e
        WHERE e.estado = 'pendiente'
          AND ${FILTRO_ALCANCE}
          AND NOT EXISTS (
            SELECT 1 FROM recordatorios.envios o
-           WHERE o.telefono = e.telefono AND o.id <> e.id
-             AND (o.estado = 'procesando' OR o.enviado_en > now() - make_interval(secs => $4))
+           WHERE (o.estado = 'procesando' OR o.enviado_en > now() - make_interval(secs => $4))
+             AND o.id <> e.id AND ${claveTelefono("o")} = ${claveTelefono("e")}
          )
-       ORDER BY COALESCE(e.telefono, e.id::text), e.id
+       ORDER BY COALESCE(${claveTelefono("e")}, e.id::text), e.id
        LIMIT $3
      )
      UPDATE recordatorios.envios e
@@ -142,59 +157,88 @@ async function quedanPendientes(alcance: Alcance): Promise<boolean> {
   return fila?.hay ?? false;
 }
 
-async function despacharEnvio(envio: Envio, etapas: Map<string, Etapa>): Promise<Desenlace> {
+async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Promise<Desenlace> {
   try {
-    const { TELEFONO_CODIGO_PAIS, MONEDA } = configGeneral();
+    const { TELEFONO_CODIGO_PAIS, APP_URL } = configGeneral();
 
-    // Siempre se relee la fuente: la cuota pudo pagarse o corregirse desde la planificación.
+    // Siempre se relee cartera: la cuota pudo pagarse o corregirse desde la planificación.
     const fuente = await consultarUno<CuotaFuente>(
       `SELECT * FROM recordatorios.v_cuotas_fuente
-       WHERE cuota_id = $1 AND fecha_vencimiento = $2::date
-       LIMIT 1`,
-      [envio.cuota_id, envio.fecha_vencimiento],
+       WHERE compra_id = $1 AND cuota_numero = $2 AND fecha_vencimiento = $3::date`,
+      [envio.compra_id, envio.cuota_numero, envio.fecha_vencimiento],
     );
-    if (!fuente) return await omitir(envio, "La cuota ya no aparece en la vista fuente");
-    if (fuente.pagada) return await omitir(envio, "La cuota ya está pagada");
+    if (!fuente) {
+      return await omitir(envio, "La cuota ya no aparece en cartera (compra no activa, producto inactivo o plan cambiado)");
+    }
+    if (fuente.pagada) return await omitir(envio, "La cuota ya está pagada en cartera");
+    if (await pagoReportado(envio.cuota_id, envio.fecha_vencimiento)) {
+      return await omitir(envio, "El estudiante respondió por WhatsApp que ya pagó esta cuota");
+    }
+    // El seguimiento es un mensaje normal: fuera de la ventana de 24 h WhatsApp lo rechaza.
+    if (envio.etapa === ETAPA_SEGUIMIENTO && (await ventanaCerrada(envio.cuota_id, envio.fecha_vencimiento))) {
+      return await omitir(envio, "Se cerró la ventana de 24 h de WhatsApp: el seguimiento (mensaje normal) ya no se puede enviar");
+    }
 
     await consultar(
       `UPDATE recordatorios.envios
-       SET cliente_id = $2, nombre = $3, telefono = $4, email = $5, valor = $6, concepto = $7, link_pago = $8
+       SET nombre = $2, telefono = $3, email = $4, pais = $5, producto = $6, metodo_pago = $7,
+           pasarela = $8, concepto = $9, link_pago = $10, total_cuotas = $11, referido = $12, descuento = $13
        WHERE id = $1`,
-      [envio.id, fuente.cliente_id, fuente.nombre, fuente.telefono, fuente.email, fuente.valor, fuente.concepto, fuente.link_pago],
+      [
+        envio.id, fuente.nombre, fuente.telefono, fuente.email, fuente.pais, fuente.producto,
+        fuente.metodo_pago, fuente.pasarela, fuente.concepto, fuente.link_pago, fuente.total_cuotas,
+        fuente.referido, fuente.descuento,
+      ],
     );
 
-    const workflowId = etapas.get(envio.etapa)?.ghl_workflow_id;
-    if (!workflowId) return await fallar(envio, `La etapa ${envio.etapa} no tiene workflow de GHL configurado`);
-
-    const telefono = normalizarTelefono(fuente.telefono, TELEFONO_CODIGO_PAIS);
-    if (!telefono) return await fallar(envio, `Teléfono inválido o vacío: "${fuente.telefono ?? ""}"`);
-
-    if (!fuente.link_pago || !/^https?:\/\//i.test(fuente.link_pago) || !URL.canParse(fuente.link_pago)) {
-      return await fallar(envio, "Link de pago vacío o inválido");
+    const etapa = etapas.get(envio.etapa);
+    if (!etapa?.ghl_webhook_url) {
+      return await fallar(envio, `La etapa ${envio.etapa} no tiene configurado el webhook del workflow de GHL`);
     }
 
+    const telefono = normalizarTelefono(fuente.telefono, fuente.pais, TELEFONO_CODIGO_PAIS);
+    if (!telefono) return await fallar(envio, `Teléfono inválido o vacío: "${fuente.telefono ?? ""}"`);
+
+    // El seguimiento no lleva link de pago; los recordatorios sí.
+    if (etapa.offset_dias !== null && !esUrlHttp(fuente.link_pago)) {
+      return await fallar(
+        envio,
+        `Falta el link de ${PASARELAS[fuente.pasarela]}${fuente.referido ? " con descuento de referido" : ""} ` +
+          `para el plan de ${fuente.total_cuotas} cuotas (${fuente.producto}). Agrégalo en los enlaces de ventas ` +
+          `del lanzamiento o en "Productos y links de pago".`,
+      );
+    }
+
+    const datos: DatosWorkflow = {
+      envio_id: envio.id,
+      etapa: envio.etapa,
+      plantilla: etapa.plantilla ?? "",
+      primer_nombre: primerNombre(fuente.nombre) || "estudiante",
+      nombre: fuente.nombre ?? "",
+      telefono,
+      email: fuente.email ?? "",
+      link_pago: `${APP_URL}/p/${envio.token}`,
+      link_soporte: ajustes.link_soporte ?? "",
+      token: envio.token,
+      cuota: String(fuente.cuota_numero),
+      total_cuotas: String(fuente.total_cuotas),
+      concepto: fuente.concepto,
+      fecha_limite: formatearFechaLarga(envio.fecha_vencimiento),
+      metodo_pago: fuente.metodo_pago ?? "",
+      pasarela: fuente.pasarela,
+      referido: fuente.referido ? "si" : "no",
+      producto: fuente.producto,
+    };
+
     if (configGhl().GHL_DRY_RUN) {
-      await marcarEnviado(envio.id, null, telefono, "SIMULADO: GHL_DRY_RUN activo, no se llamó a GHL");
-      await registrarEvento(envio.id, "simulado", { telefono, workflowId });
+      await marcarEnviado(envio.id, telefono, true, "SIMULADO: GHL_DRY_RUN activo, no se llamó a GHL");
+      await registrarEvento(envio.id, "simulado", { datos });
       return "enviado";
     }
 
-    const contactId = await upsertContacto({
-      telefono,
-      nombre: fuente.nombre,
-      campos: {
-        token: envio.token,
-        valor: formatearMoneda(fuente.valor, MONEDA),
-        fechaLimite: formatearFechaLarga(envio.fecha_vencimiento),
-        concepto: fuente.concepto ?? "",
-        etapa: envio.etapa,
-        envioId: envio.id,
-      },
-    });
-    await inscribirEnWorkflow(contactId, workflowId);
-
-    await marcarEnviado(envio.id, contactId, telefono, null);
-    await registrarEvento(envio.id, "enviado", { contactId, workflowId, telefono, intento: envio.intentos });
+    const respuestaGhl = await dispararWorkflow(etapa.ghl_webhook_url, datos);
+    await marcarEnviado(envio.id, telefono, false, null);
+    await registrarEvento(envio.id, "enviado", { telefono, intento: envio.intentos, respuestaGhl });
     return "enviado";
   } catch (error) {
     const detalle = error instanceof ErrorGhl ? { estadoHttp: error.estadoHttp, cuerpo: error.cuerpo } : undefined;
@@ -202,15 +246,17 @@ async function despacharEnvio(envio: Envio, etapas: Map<string, Etapa>): Promise
   }
 }
 
-async function marcarEnviado(id: string, contactId: string | null, telefono: string, nota: string | null) {
+/** Si cambió el teléfono, el contacto/conversación de GHL se vuelven a buscar al verificar. */
+async function marcarEnviado(id: string, telefono: string, simulado: boolean, nota: string | null) {
   await consultar(
     `UPDATE recordatorios.envios
-     SET estado = 'enviado', enviado_en = now(), procesando_desde = NULL, ultimo_error = $4,
-         ghl_conversation_id = CASE WHEN ghl_contact_id IS NOT DISTINCT FROM $2 THEN ghl_conversation_id END,
-         ghl_contact_id = $2, telefono_e164 = $3,
-         ghl_message_id = NULL, entregado_en = NULL, leido_en = NULL, confirmado_workflow_en = NULL
+     SET estado = 'enviado', enviado_en = now(), procesando_desde = NULL, ultimo_error = $4, simulado = $3,
+         ghl_contact_id = CASE WHEN telefono_e164 IS NOT DISTINCT FROM $2 THEN ghl_contact_id END,
+         ghl_conversation_id = CASE WHEN telefono_e164 IS NOT DISTINCT FROM $2 THEN ghl_conversation_id END,
+         telefono_e164 = $2,
+         ghl_message_id = NULL, entregado_en = NULL, leido_en = NULL
      WHERE id = $1`,
-    [id, contactId, telefono, nota],
+    [id, telefono, simulado, nota],
   );
 }
 

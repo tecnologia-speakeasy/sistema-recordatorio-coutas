@@ -13,19 +13,28 @@ export function TarjetasKpi({ kpis }: { kpis: Kpis }) {
     { titulo: "Leídos", valor: e.leido, nota: `${porcentaje(e.leido, enviados)} de los enviados` },
     { titulo: "Fallidos", valor: e.fallido, nota: "Reenviables desde la tabla", alerta: e.fallido > 0 },
     { titulo: "Omitidos", valor: e.omitido, nota: "Pagadas, sin datos o fuera de fecha" },
-    { titulo: "Clic en el botón", valor: kpis.conClick, nota: `${porcentaje(kpis.conClick, enviados)} de los enviados` },
     {
-      titulo: "Pagadas tras recordatorio",
+      titulo: "Clic en el link de pago",
+      valor: kpis.conClick,
+      nota: `${kpis.tocaronRealizarPago} tocaron «Realizar pago» · ${kpis.seguimientosEnviados} seguimientos`,
+    },
+    {
+      titulo: "Respondieron «Pago realizado»",
+      valor: kpis.pagosReportados,
+      nota: `${porcentaje(kpis.pagosReportados, kpis.cuotasRecordadas)} de ${kpis.cuotasRecordadas} cuotas recordadas`,
+    },
+    {
+      titulo: "Pagadas en cartera",
       valor: kpis.pagadasTrasRecordatorio ?? "—",
       nota:
         kpis.pagadasTrasRecordatorio === null
           ? "Vista fuente no disponible"
-          : `${porcentaje(kpis.pagadasTrasRecordatorio, kpis.cuotasRecordadas)} de ${kpis.cuotasRecordadas} cuotas`,
+          : `${porcentaje(kpis.pagadasTrasRecordatorio, kpis.cuotasRecordadas)} de las cuotas recordadas`,
     },
   ];
 
   return (
-    <ul className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+    <ul className="grid grid-cols-2 gap-3 md:grid-cols-4">
       {tarjetas.map((t) => (
         <li
           key={t.titulo}

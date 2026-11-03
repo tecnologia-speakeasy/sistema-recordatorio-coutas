@@ -1,38 +1,29 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { consultarUno } from "@/lib/db";
-import { registrarEvento } from "@/lib/recordatorios/bitacora";
+import { registrarClic } from "@/lib/recordatorios/interacciones";
+import { esUrlHttp } from "@/lib/utilidades";
 
-// Las vistas previas de enlaces (WhatsApp, Facebook, etc.) no cuentan como clic.
-const AGENTE_PREVISUALIZACION = /whatsapp|facebookexternalhit|facebot|telegrambot|slackbot|twitterbot|bot\b|crawler|spider|preview/i;
+// Las vistas previas de enlaces no cuentan como clic. El robot de WhatsApp se
+// identifica como "WhatsApp/2.x"; un navegador real (incluido el que abre WhatsApp)
+// empieza por "Mozilla/", aunque mencione WhatsApp más adelante.
+const ROBOT_PREVISUALIZACION = /facebookexternalhit|facebot|telegrambot|slackbot|twitterbot|discordbot|bot\b|crawler|spider|preview/i;
+const esPrevisualizacion = (agente: string) =>
+  ROBOT_PREVISUALIZACION.test(agente) || (/whatsapp/i.test(agente) && !/^Mozilla\//i.test(agente));
 
 /**
- * Destino del botón de URL dinámica de la plantilla: https://<app>/p/{{1}}
- * Registra el clic y redirige al link de pago propio del usuario.
+ * Link rastreado que recibe el estudiante: https://<app>/p/<token>
+ * (como texto en el mensaje o como sufijo del botón de URL dinámica).
+ * Registra el clic, programa el seguimiento y redirige a su link de pago
+ * (Hotmart o Stripe según su método y su plan de cuotas).
  */
 export async function GET(request: NextRequest, ctx: RouteContext<"/p/[token]">) {
   const { token } = await ctx.params;
   if (!/^[a-f0-9]{32}$/.test(token)) return noDisponible();
 
   const agente = request.headers.get("user-agent") ?? "";
-  const esPrevisualizacion = AGENTE_PREVISUALIZACION.test(agente);
+  const destino = await registrarClic(token, agente, esPrevisualizacion(agente));
+  if (!esUrlHttp(destino)) return noDisponible();
 
-  const envio = esPrevisualizacion
-    ? await consultarUno<{ id: string; link_pago: string | null }>(
-        "SELECT id, link_pago FROM recordatorios.envios WHERE token = $1",
-        [token],
-      )
-    : await consultarUno<{ id: string; link_pago: string | null }>(
-        `UPDATE recordatorios.envios
-         SET clicks = clicks + 1, primer_click_en = COALESCE(primer_click_en, now())
-         WHERE token = $1
-         RETURNING id, link_pago`,
-        [token],
-      );
-
-  if (!envio?.link_pago || !/^https?:\/\//i.test(envio.link_pago)) return noDisponible();
-  if (!esPrevisualizacion) await registrarEvento(envio.id, "click", { agente: agente.slice(0, 200) });
-
-  return NextResponse.redirect(envio.link_pago, 302);
+  return NextResponse.redirect(destino, 302);
 }
 
 function noDisponible() {

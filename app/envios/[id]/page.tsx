@@ -7,8 +7,8 @@ import { BotonAccion } from "@/app/componentes/boton-accion";
 import { InsigniaEstado } from "@/app/componentes/insignia-estado";
 import { configGeneral } from "@/lib/config";
 import { eventosDeEnvio, obtenerEnvio } from "@/lib/recordatorios/consultas";
-import { ESTADOS_REENVIABLES } from "@/lib/recordatorios/tipos";
-import { formatearFechaCorta, formatearFechaHora, formatearMoneda } from "@/lib/utilidades";
+import { ESTADOS_REENVIABLES, PASARELAS, RESPUESTAS } from "@/lib/recordatorios/tipos";
+import { formatearFechaCorta, formatearFechaHora } from "@/lib/utilidades";
 
 export const maxDuration = 300;
 
@@ -32,38 +32,58 @@ async function Contenido({ params }: { params: PageProps<"/envios/[id]">["params
   const [envio, eventos] = await Promise.all([obtenerEnvio(id), eventosDeEnvio(id)]);
   if (!envio) notFound();
 
-  const { APP_TIMEZONE: zona, APP_URL, MONEDA } = configGeneral();
+  const { APP_TIMEZONE: zona, APP_URL } = configGeneral();
   const hora = (fecha: Date | null) => formatearFechaHora(fecha, zona) || "—";
-  const linkRecordatorio = APP_URL ? `${APP_URL.replace(/\/$/, "")}/p/${envio.token}` : `/p/${envio.token}`;
+  const enlace = (url: string | null) =>
+    url ? (
+      <a href={url} target="_blank" rel="noreferrer" className="break-all text-morado underline">
+        {url}
+      </a>
+    ) : (
+      "—"
+    );
 
   const datos: [string, ReactNode][] = [
     ["Etapa", envio.etapa],
-    ["Programado para", formatearFechaCorta(envio.fecha_programada)],
-    ["Vencimiento", formatearFechaCorta(envio.fecha_vencimiento)],
-    ["Cuota", `#${envio.cuota_id}${envio.concepto ? ` · ${envio.concepto}` : ""}`],
-    ["Valor", formatearMoneda(envio.valor, MONEDA) || "—"],
-    ["Cliente", envio.cliente_id ?? "—"],
-    ["Teléfono (fuente)", envio.telefono ?? "—"],
-    ["Teléfono enviado", envio.telefono_e164 ?? "—"],
-    ["Email", envio.email ?? "—"],
     [
-      "Link de pago",
-      envio.link_pago ? (
-        <a href={envio.link_pago} target="_blank" rel="noreferrer" className="break-all text-morado underline">
-          {envio.link_pago}
-        </a>
-      ) : (
-        "—"
-      ),
+      "Programado para",
+      envio.programado_para ? hora(envio.programado_para) : formatearFechaCorta(envio.fecha_programada),
     ],
-    ["Botón de la plantilla", <code key="boton" className="break-all text-xs">{linkRecordatorio}</code>],
+    ["Producto", envio.producto ?? "—"],
+    ["Cuota", `${envio.concepto ?? envio.cuota_numero} · vence ${formatearFechaCorta(envio.fecha_vencimiento)}`],
+    [
+      "Método de pago",
+      `${envio.metodo_pago ?? "—"}${envio.pasarela ? ` → link de ${PASARELAS[envio.pasarela]}${envio.referido ? " (referido)" : ""}` : ""}`,
+    ],
+    ["Descuento", envio.descuento ?? "—"],
+    ["Email", envio.email ?? "—"],
+    ["Teléfono (cartera)", `${envio.telefono ?? "—"}${envio.pais ? ` · ${envio.pais}` : ""}`],
+    ["Teléfono enviado", envio.telefono_e164 ?? "—"],
+    ["Link de pago", enlace(envio.link_pago)],
+    ["Link rastreado (el que recibe)", <code key="rastreado" className="break-all text-xs">{`${APP_URL}/p/${envio.token}`}</code>],
     ["Contacto GHL", envio.ghl_contact_id ?? "—"],
     ["Intentos", envio.intentos],
-    ["Enviado a GHL", hora(envio.enviado_en)],
-    ["Confirmado por workflow", hora(envio.confirmado_workflow_en)],
+    ["Enviado a GHL", `${hora(envio.enviado_en)}${envio.simulado ? " (simulado)" : ""}`],
     ["Entregado", hora(envio.entregado_en)],
     ["Leído", hora(envio.leido_en)],
-    ["Clics en el botón", `${envio.clicks}${envio.primer_click_en ? ` (primero: ${hora(envio.primer_click_en)})` : ""}`],
+    ["Clics en el link", `${envio.clicks}${envio.primer_click_en ? ` (primero: ${hora(envio.primer_click_en)})` : ""}`],
+    [
+      "Respuesta",
+      envio.respuesta ? `${RESPUESTAS[envio.respuesta]} · ${hora(envio.respondido_en)}` : "—",
+    ],
+    ["Tocó «Realizar pago»", hora(envio.realizar_pago_en)],
+    ["Pidió soporte", hora(envio.soporte_en)],
+    ["Pago reportado", envio.pago_reportado_en ? hora(envio.pago_reportado_en) : "—"],
+    [
+      "Origen",
+      envio.origen_envio_id ? (
+        <Link key="origen" href={`/envios/${envio.origen_envio_id}`} className="text-morado underline">
+          Clic en el envío #{envio.origen_envio_id}
+        </Link>
+      ) : (
+        "Planificación por fecha"
+      ),
+    ],
   ];
 
   return (

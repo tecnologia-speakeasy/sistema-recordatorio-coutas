@@ -3,26 +3,16 @@ import { configGhl } from "./config";
 import { esperar } from "./utilidades";
 
 /**
- * Cliente mínimo de HighLevel API v2 (services.leadconnectorhq.com).
+ * Integración con HighLevel.
  *
- * WhatsApp: la API pública de mensajes no expone envío de plantillas con
- * variables, así que el envío lo hace un workflow de GHL. Este sistema:
- *   1. hace upsert del contacto con los campos personalizados del recordatorio,
- *   2. inscribe el contacto en el workflow de la etapa,
- *   3. luego consulta la conversación para leer el estado real del mensaje.
+ * Envío: cada etapa tiene un workflow cuyo disparador es "Inbound Webhook". El
+ * sistema hace POST a la URL de ese webhook con los datos del recordatorio y el
+ * workflow los usa como {{inboundWebhookRequest.<campo>}} en la plantilla. No se
+ * crean campos personalizados ni se modifican contactos desde aquí.
+ *
+ * Lectura (opcional, con GHL_TOKEN): se busca el contacto por teléfono y se lee
+ * su conversación para conocer el estado real del mensaje de WhatsApp.
  */
-
-/** Claves (sin el prefijo "contact.") de los campos personalizados que deben existir en GHL. */
-export const CAMPOS_GHL = {
-  token: "recordatorio_token",
-  valor: "recordatorio_valor",
-  fechaLimite: "recordatorio_fecha_limite",
-  concepto: "recordatorio_concepto",
-  etapa: "recordatorio_etapa",
-  envioId: "recordatorio_envio_id",
-} as const;
-
-export type CampoGhl = keyof typeof CAMPOS_GHL;
 
 export class ErrorGhl extends Error {
   constructor(
@@ -35,24 +25,10 @@ export class ErrorGhl extends Error {
   }
 }
 
-async function solicitud<T>(metodo: "GET" | "POST", ruta: string, cuerpo?: unknown): Promise<T> {
-  const config = configGhl();
-  const url = `${config.GHL_API_URL}${ruta}`;
-
+/** fetch con reintentos ante 429/5xx. `descripcion` va en el error (no incluir secretos). */
+async function pedir<T>(url: string, init: RequestInit, descripcion: string): Promise<T> {
   for (let intento = 1; ; intento++) {
-    const respuesta = await fetch(url, {
-      method: metodo,
-      headers: {
-        Authorization: `Bearer ${config.GHL_TOKEN}`,
-        Version: config.GHL_API_VERSION,
-        Accept: "application/json",
-        ...(cuerpo !== undefined && { "Content-Type": "application/json" }),
-      },
-      body: cuerpo !== undefined ? JSON.stringify(cuerpo) : undefined,
-      cache: "no-store",
-      signal: AbortSignal.timeout(20_000),
-    });
-
+    const respuesta = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(20_000) });
     const texto = await respuesta.text();
     const datos = texto ? safeJson(texto) : null;
 
@@ -66,7 +42,7 @@ async function solicitud<T>(metodo: "GET" | "POST", ruta: string, cuerpo?: unkno
     }
 
     throw new ErrorGhl(
-      `GHL ${metodo} ${ruta} -> ${respuesta.status}: ${extraerMensaje(datos) ?? respuesta.statusText}`,
+      `${descripcion} -> ${respuesta.status}: ${extraerMensaje(datos) ?? respuesta.statusText}`,
       respuesta.status,
       datos,
     );
@@ -89,85 +65,61 @@ function extraerMensaje(datos: unknown): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Campos personalizados: se resuelven por clave a id y se cachean 10 minutos.
+// Envío: webhook entrante del workflow
 // ---------------------------------------------------------------------------
 
-let cacheCampos: { ids: Record<CampoGhl, string>; expira: number } | null = null;
+/** Datos que recibe el workflow: todos texto plano (GHL no admite objetos ni arrays). */
+export type DatosWorkflow = Record<string, string>;
 
-export async function idsCamposPersonalizados(): Promise<Record<CampoGhl, string>> {
-  if (cacheCampos && cacheCampos.expira > Date.now()) return cacheCampos.ids;
-
-  const { GHL_LOCATION_ID } = configGhl();
-  const { customFields } = await solicitud<{ customFields: { id: string; fieldKey: string }[] }>(
-    "GET",
-    `/locations/${encodeURIComponent(GHL_LOCATION_ID)}/customFields?model=contact`,
+export function dispararWorkflow(urlWebhook: string, datos: DatosWorkflow): Promise<unknown> {
+  return pedir(
+    urlWebhook,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(datos),
+    },
+    "Webhook del workflow de GHL",
   );
+}
 
-  const porClave = new Map(customFields.map((c) => [c.fieldKey.replace(/^contact\./, ""), c.id]));
-  const faltantes = Object.values(CAMPOS_GHL).filter((clave) => !porClave.has(clave));
-  if (faltantes.length) {
-    throw new ErrorGhl(
-      `Faltan campos personalizados de contacto en GHL: ${faltantes.map((c) => `contact.${c}`).join(", ")}`,
-      0,
-      null,
-    );
+// ---------------------------------------------------------------------------
+// Lectura: contacto, conversación y estado del mensaje de WhatsApp
+// ---------------------------------------------------------------------------
+
+function api<T>(ruta: string): Promise<T> {
+  const config = configGhl();
+  if (!config.GHL_TOKEN || !config.GHL_LOCATION_ID) {
+    throw new Error("Falta GHL_TOKEN o GHL_LOCATION_ID para consultar GHL");
   }
-
-  const ids = Object.fromEntries(
-    Object.entries(CAMPOS_GHL).map(([campo, clave]) => [campo, porClave.get(clave)!]),
-  ) as Record<CampoGhl, string>;
-  cacheCampos = { ids, expira: Date.now() + 10 * 60_000 };
-  return ids;
-}
-
-// ---------------------------------------------------------------------------
-// Contactos y workflows
-// ---------------------------------------------------------------------------
-
-export interface DatosContacto {
-  telefono: string;
-  nombre: string | null;
-  campos: Record<CampoGhl, string>;
-}
-
-export async function upsertContacto({ telefono, nombre, campos }: DatosContacto): Promise<string> {
-  const { GHL_LOCATION_ID } = configGhl();
-  const ids = await idsCamposPersonalizados();
-  const [firstName, ...resto] = (nombre ?? "").trim().split(/\s+/);
-
-  // Solo se envían teléfono, nombre y campos del recordatorio. No se envían
-  // `tags` (sobrescribiría todas las etiquetas) ni email (evita fusiones
-  // inesperadas si la deduplicación de la cuenta prioriza el email).
-  const respuesta = await solicitud<{ contact?: { id?: string } }>("POST", "/contacts/upsert", {
-    locationId: GHL_LOCATION_ID,
-    phone: telefono,
-    ...(firstName && { firstName, lastName: resto.join(" ") || undefined }),
-    source: "recordatorio-cuotas",
-    customFields: (Object.keys(campos) as CampoGhl[]).map((campo) => ({
-      id: ids[campo],
-      fieldValue: campos[campo],
-    })),
-  });
-
-  const id = respuesta?.contact?.id;
-  if (!id) throw new ErrorGhl("GHL no devolvió el id del contacto en el upsert", 200, respuesta);
-  return id;
-}
-
-export async function inscribirEnWorkflow(contactId: string, workflowId: string): Promise<void> {
-  const respuesta = await solicitud<{ succeeded?: boolean; succeded?: boolean }>(
-    "POST",
-    `/contacts/${encodeURIComponent(contactId)}/workflow/${encodeURIComponent(workflowId)}`,
-    {},
+  return pedir<T>(
+    `${config.GHL_API_URL}${ruta}`,
+    {
+      headers: {
+        Authorization: `Bearer ${config.GHL_TOKEN}`,
+        Version: config.GHL_API_VERSION,
+        Accept: "application/json",
+      },
+    },
+    `GHL GET ${ruta.split("?")[0]}`,
   );
-  if ((respuesta?.succeeded ?? respuesta?.succeded) === false) {
-    throw new ErrorGhl("GHL rechazó la inscripción en el workflow", 200, respuesta);
-  }
 }
 
-// ---------------------------------------------------------------------------
-// Conversaciones: lectura del estado real del mensaje de WhatsApp
-// ---------------------------------------------------------------------------
+/** Contacto que el workflow usó para enviar: se busca por teléfono y, si no aparece, por email. */
+export async function buscarContacto(telefono: string, email: string | null): Promise<string | null> {
+  const { GHL_LOCATION_ID } = configGhl();
+  const criterios: Record<string, string>[] = [{ number: telefono }, ...(email ? [{ email }] : [])];
+  for (const criterio of criterios) {
+    const params = new URLSearchParams({ locationId: GHL_LOCATION_ID ?? "", ...criterio });
+    try {
+      const respuesta = await api<{ contact?: { id?: string } | null }>(`/contacts/search/duplicate?${params}`);
+      if (respuesta?.contact?.id) return respuesta.contact.id;
+    } catch (error) {
+      if (!(error instanceof ErrorGhl && error.estadoHttp === 404)) throw error;
+    }
+  }
+  return null;
+}
 
 export interface MensajeGhl {
   id: string;
@@ -181,18 +133,14 @@ export interface MensajeGhl {
 
 export async function buscarConversacion(contactId: string): Promise<string | null> {
   const { GHL_LOCATION_ID } = configGhl();
-  const params = new URLSearchParams({ locationId: GHL_LOCATION_ID, contactId, limit: "5" });
-  const { conversations } = await solicitud<{ conversations: { id: string }[] }>(
-    "GET",
-    `/conversations/search?${params}`,
-  );
+  const params = new URLSearchParams({ locationId: GHL_LOCATION_ID ?? "", contactId, limit: "5" });
+  const { conversations } = await api<{ conversations: { id: string }[] }>(`/conversations/search?${params}`);
   return conversations[0]?.id ?? null;
 }
 
 export async function mensajesWhatsapp(conversationId: string): Promise<MensajeGhl[]> {
   const params = new URLSearchParams({ type: "TYPE_WHATSAPP", limit: "20" });
-  const respuesta = await solicitud<{ messages: { messages: MensajeGhl[] } }>(
-    "GET",
+  const respuesta = await api<{ messages: { messages: MensajeGhl[] } }>(
     `/conversations/${encodeURIComponent(conversationId)}/messages?${params}`,
   );
   return respuesta.messages?.messages ?? [];

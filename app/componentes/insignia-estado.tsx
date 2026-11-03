@@ -1,14 +1,4 @@
-import type { EstadoEnvio } from "@/lib/recordatorios/tipos";
-
-export const ETIQUETAS_ESTADO: Record<EstadoEnvio, string> = {
-  pendiente: "Pendiente",
-  procesando: "Procesando",
-  enviado: "Enviado",
-  entregado: "Entregado",
-  leido: "Leído",
-  fallido: "Fallido",
-  omitido: "Omitido",
-};
+import { ETIQUETAS_ESTADO, type EstadoEnvio } from "@/lib/recordatorios/tipos";
 
 const ESTILOS: Record<EstadoEnvio, string> = {
   pendiente: "bg-neutral-100 text-neutral-700 ring-neutral-300",

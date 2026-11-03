@@ -7,8 +7,10 @@ export type TipoEvento =
   | "error"
   | "omitido"
   | "estado_ghl"
-  | "webhook_workflow"
   | "click"
+  | "programado"
+  | "seguimiento_programado"
+  | "respuesta"
   | "reenvio_manual"
   | "recuperado";
 

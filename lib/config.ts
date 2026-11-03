@@ -11,25 +11,35 @@ const booleano = z
   .optional()
   .transform((v) => v === "true" || v === "1");
 
+const opcional = z
+  .string()
+  .trim()
+  .optional()
+  .transform((v) => v || undefined);
+
 const esquemaGeneral = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL es obligatoria"),
-  APP_URL: z.url().optional(),
+  // URL pública de esta app: base del link rastreado que recibe el estudiante (/p/<token>).
+  APP_URL: z.url("APP_URL es obligatoria (URL pública de esta app)").transform((v) => v.replace(/\/+$/, "")),
   APP_TIMEZONE: z.string().default("America/Bogota"),
+  // Solo se usa si el país de la compra no se reconoce y el número no trae indicativo.
   TELEFONO_CODIGO_PAIS: z.string().regex(/^\d{1,3}$/).default("57"),
-  MONEDA: z.string().length(3).default("COP"),
   // Ventana horaria (zona APP_TIMEZONE) en la que el cron puede despachar: [inicio, fin).
   HORA_INICIO_ENVIO: z.coerce.number().int().min(0).max(23).default(8),
   HORA_FIN_ENVIO: z.coerce.number().int().min(1).max(24).default(20),
   // Tiempo máximo que una ejecución dedica a despachar (debe ser < maxDuration del endpoint).
   PRESUPUESTO_EJECUCION_SEG: z.coerce.number().int().min(10).default(240),
-  // Separación mínima entre dos envíos al mismo teléfono: los campos del contacto
-  // en GHL se sobrescriben, así que el workflow anterior debe leerlos antes.
+  // Separación mínima entre dos envíos al mismo teléfono, para que la verificación
+  // asocie cada mensaje de WhatsApp a su envío.
   ESPERA_MISMO_CONTACTO_SEG: z.coerce.number().int().min(0).default(60),
+  // Horas entre el primer clic en el link de pago y el mensaje de seguimiento.
+  SEGUIMIENTO_HORAS: z.coerce.number().min(0).max(72).default(3),
 });
 
 const esquemaGhl = z.object({
-  GHL_TOKEN: z.string().min(1, "GHL_TOKEN es obligatorio"),
-  GHL_LOCATION_ID: z.string().min(1, "GHL_LOCATION_ID es obligatorio"),
+  // Solo lectura (verificar entregas). Sin token, los envíos quedan en "enviado".
+  GHL_TOKEN: opcional,
+  GHL_LOCATION_ID: opcional,
   GHL_API_URL: z.url().default("https://services.leadconnectorhq.com"),
   GHL_API_VERSION: z.string().default("v3"),
   GHL_DRY_RUN: booleano,
@@ -37,7 +47,6 @@ const esquemaGhl = z.object({
 
 const esquemaSheets = z.object({
   GOOGLE_SHEETS_ID: z.string().min(1),
-  GOOGLE_SHEETS_PESTANA: z.string().default("Envios"),
   GOOGLE_SA_EMAIL: z.email(),
   GOOGLE_SA_PRIVATE_KEY: z.string().min(1),
 });
@@ -68,6 +77,12 @@ export const modoSimulacion = () => booleano.safeParse(process.env.GHL_DRY_RUN).
 export const configGeneral = () => cargar("general", esquemaGeneral);
 export const configGhl = () => cargar("GHL", esquemaGhl);
 export const configSeguridad = () => cargar("seguridad", esquemaSeguridad);
+
+/** La API de GHL (token + location) solo se necesita para verificar entregas. */
+export function apiGhlConfigurada(): boolean {
+  const { GHL_TOKEN, GHL_LOCATION_ID } = configGhl();
+  return Boolean(GHL_TOKEN && GHL_LOCATION_ID);
+}
 
 export function configSheets() {
   if (!process.env.GOOGLE_SHEETS_ID) return null;

@@ -1,9 +1,10 @@
 import "server-only";
+import { apiGhlConfigurada } from "../config";
 import { consultar } from "../db";
-import { buscarConversacion, mensajesWhatsapp, type MensajeGhl } from "../ghl";
+import { buscarContacto, buscarConversacion, mensajesWhatsapp, type MensajeGhl } from "../ghl";
 import { mensajeDeError } from "../utilidades";
 import { registrarEvento } from "./bitacora";
-import type { Envio } from "./tipos";
+import { ETAPA_SEGUIMIENTO, type Envio } from "./tipos";
 
 /** Si tras este tiempo el workflow no generó mensaje de WhatsApp, el envío se marca fallido. */
 const MINUTOS_SIN_MENSAJE = 120;
@@ -12,13 +13,14 @@ const MAX_POR_EJECUCION = 150;
 /**
  * Lee en GHL el estado real del mensaje de WhatsApp de los envíos recientes
  * ('enviado' o 'entregado', últimas 72 h) y actualiza entregado/leído/fallido.
- * Devuelve cuántos envíos cambiaron de estado.
+ * Devuelve cuántos envíos cambiaron de estado. Sin GHL_TOKEN no hace nada.
  */
 export async function verificarEntregas(): Promise<number> {
+  if (!apiGhlConfigurada()) return 0;
   const envios = await consultar<Envio>(
     `SELECT * FROM recordatorios.envios
      WHERE estado IN ('enviado', 'entregado')
-       AND ghl_contact_id IS NOT NULL
+       AND NOT simulado AND telefono_e164 IS NOT NULL
        AND enviado_en BETWEEN now() - interval '72 hours' AND now() - interval '1 minute'
      ORDER BY enviado_en
      LIMIT $1`,
@@ -38,21 +40,28 @@ export async function verificarEntregas(): Promise<number> {
 }
 
 async function verificarEnvio(envio: Envio): Promise<boolean> {
-  const conversacion = envio.ghl_conversation_id ?? (await buscarConversacion(envio.ghl_contact_id!));
-  const mensaje = conversacion ? await localizarMensaje(envio, conversacion) : null;
+  // El workflow encuentra (o crea) el contacto; aquí solo se busca, sin modificarlo.
+  const contacto = envio.ghl_contact_id ?? (await buscarContacto(envio.telefono_e164!, envio.email));
+  const conversacion = contacto ? (envio.ghl_conversation_id ?? (await buscarConversacion(contacto))) : null;
+  const mensaje = contacto && conversacion ? await localizarMensaje(envio, contacto, conversacion) : null;
 
   if (!mensaje) {
     const minutos = (Date.now() - envio.enviado_en!.getTime()) / 60_000;
     if (envio.estado === "enviado" && minutos > MINUTOS_SIN_MENSAJE) {
-      const error =
-        "GHL no registró un mensaje de WhatsApp para este envío. Revisa el workflow " +
-        "(re-entrada permitida, plantilla aprobada, acción de WhatsApp activa).";
-      await actualizar(envio.id, "fallido", { conversacion, mensajeId: null, error });
-      await registrarEvento(envio.id, "estado_ghl", { estado: "sin_mensaje", minutos: Math.round(minutos) });
+      const error = !contacto
+        ? `GHL no tiene un contacto con el teléfono ${envio.telefono_e164}. Revisa el paso que busca ` +
+          "o crea el contacto en el workflow."
+        : envio.etapa === ETAPA_SEGUIMIENTO
+          ? "GHL no envió el seguimiento. Lo más probable es que la ventana de 24 h ya estuviera cerrada " +
+            "(el estudiante no había respondido en el último día)."
+          : "GHL no registró un mensaje de WhatsApp para este envío. Revisa el workflow " +
+            "(re-entrada permitida, plantilla aprobada, acción de WhatsApp activa).";
+      await actualizar(envio.id, "fallido", { contacto, conversacion, mensajeId: null, error });
+      await registrarEvento(envio.id, "estado_ghl", { estado: "sin_mensaje", contacto, minutos: Math.round(minutos) });
       return true;
     }
-    if (conversacion && conversacion !== envio.ghl_conversation_id) {
-      await actualizar(envio.id, envio.estado, { conversacion, mensajeId: null, error: null });
+    if (contacto !== envio.ghl_contact_id || conversacion !== envio.ghl_conversation_id) {
+      await actualizar(envio.id, envio.estado, { contacto, conversacion, mensajeId: null, error: null });
     }
     return false;
   }
@@ -63,7 +72,7 @@ async function verificarEnvio(envio: Envio): Promise<boolean> {
 
   const estadoFinal = nuevoEstado ?? envio.estado;
   const error = estadoFinal === "fallido" ? mensaje.error || `WhatsApp reportó el estado "${mensaje.status}"` : null;
-  await actualizar(envio.id, estadoFinal, { conversacion, mensajeId: mensaje.id, error });
+  await actualizar(envio.id, estadoFinal, { contacto, conversacion, mensajeId: mensaje.id, error });
   if (cambia) await registrarEvento(envio.id, "estado_ghl", { estado: mensaje.status, mensajeId: mensaje.id, error });
   return cambia;
 }
@@ -72,7 +81,7 @@ async function verificarEnvio(envio: Envio): Promise<boolean> {
  * Mensaje de WhatsApp saliente creado por el workflow: el primero posterior al
  * envío que no esté ya asignado a otro envío del mismo contacto.
  */
-async function localizarMensaje(envio: Envio, conversacion: string): Promise<MensajeGhl | null> {
+async function localizarMensaje(envio: Envio, contacto: string, conversacion: string): Promise<MensajeGhl | null> {
   const mensajes = await mensajesWhatsapp(conversacion);
   if (envio.ghl_message_id) {
     const propio = mensajes.find((m) => m.id === envio.ghl_message_id);
@@ -84,7 +93,7 @@ async function localizarMensaje(envio: Envio, conversacion: string): Promise<Men
       await consultar<{ ghl_message_id: string }>(
         `SELECT ghl_message_id FROM recordatorios.envios
          WHERE ghl_contact_id = $1 AND id <> $2 AND ghl_message_id IS NOT NULL`,
-        [envio.ghl_contact_id, envio.id],
+        [contacto, envio.id],
       )
     ).map((f) => f.ghl_message_id),
   );
@@ -116,11 +125,17 @@ function mapearEstado(status: string | undefined): Envio["estado"] | null {
 async function actualizar(
   id: string,
   estado: Envio["estado"],
-  { conversacion, mensajeId, error }: { conversacion: string | null; mensajeId: string | null; error: string | null },
+  {
+    contacto,
+    conversacion,
+    mensajeId,
+    error,
+  }: { contacto: string | null; conversacion: string | null; mensajeId: string | null; error: string | null },
 ) {
   await consultar(
     `UPDATE recordatorios.envios
      SET estado = $2::recordatorios.estado_envio,
+         ghl_contact_id = COALESCE($6, ghl_contact_id),
          ghl_conversation_id = COALESCE($3, ghl_conversation_id),
          ghl_message_id = COALESCE($4, ghl_message_id),
          ultimo_error = CASE WHEN $2::recordatorios.estado_envio = 'fallido' THEN $5 ELSE ultimo_error END,
@@ -128,6 +143,6 @@ async function actualizar(
                              THEN COALESCE(entregado_en, now()) ELSE entregado_en END,
          leido_en = CASE WHEN $2::recordatorios.estado_envio = 'leido' THEN COALESCE(leido_en, now()) ELSE leido_en END
      WHERE id = $1`,
-    [id, estado, conversacion, mensajeId, error],
+    [id, estado, conversacion, mensajeId, error, contacto],
   );
 }

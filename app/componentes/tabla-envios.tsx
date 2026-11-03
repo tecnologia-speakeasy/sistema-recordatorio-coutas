@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { reenviarEnvio } from "@/app/acciones";
 import { TAMANO_PAGINA, type FiltrosEnvios } from "@/lib/recordatorios/consultas";
-import { ESTADOS_REENVIABLES, type Envio } from "@/lib/recordatorios/tipos";
-import { formatearFechaCorta, formatearFechaHora, formatearMoneda } from "@/lib/utilidades";
+import { ESTADOS_REENVIABLES, PASARELAS, RESPUESTAS, type Envio } from "@/lib/recordatorios/tipos";
+import { formatearFechaCorta, formatearFechaHora } from "@/lib/utilidades";
 import { BotonAccion } from "./boton-accion";
 import { InsigniaEstado } from "./insignia-estado";
 
@@ -11,10 +11,9 @@ interface Props {
   total: number;
   filtros: FiltrosEnvios;
   zona: string;
-  moneda: string;
 }
 
-export function TablaEnvios({ filas, total, filtros, zona, moneda }: Props) {
+export function TablaEnvios({ filas, total, filtros, zona }: Props) {
   if (!filas.length) {
     return <p className="py-10 text-center text-sm text-neutral-600">No hay envíos con estos filtros.</p>;
   }
@@ -42,16 +41,21 @@ export function TablaEnvios({ filas, total, filtros, zona, moneda }: Props) {
               <tr key={e.id} className="align-top">
                 <td className="py-3 pr-3 whitespace-nowrap">
                   <span className="block font-semibold text-morado">{e.etapa}</span>
-                  <span className="text-xs text-neutral-600">{formatearFechaCorta(e.fecha_programada)}</span>
+                  <span className="block text-xs text-neutral-600">{formatearFechaCorta(e.fecha_programada)}</span>
+                  {e.programado_para && e.estado === "pendiente" && (
+                    <span className="text-xs text-neutral-600">desde {formatearFechaHora(e.programado_para, zona)}</span>
+                  )}
                 </td>
                 <td className="py-3 pr-3">
                   <span className="block font-medium">{e.nombre || "Sin nombre"}</span>
-                  <span className="text-xs text-neutral-600">{e.telefono_e164 ?? e.telefono ?? "Sin teléfono"}</span>
+                  <span className="block text-xs text-neutral-600">{e.telefono_e164 ?? e.telefono ?? "Sin teléfono"}</span>
+                  <span className="text-xs break-all text-neutral-600">{e.email}</span>
                 </td>
                 <td className="py-3 pr-3">
-                  <span className="block">{formatearMoneda(e.valor, moneda) || "—"}</span>
+                  <span className="block">{e.concepto}</span>
                   <span className="text-xs text-neutral-600">
-                    Vence {formatearFechaCorta(e.fecha_vencimiento)} · #{e.cuota_id}
+                    Vence {formatearFechaCorta(e.fecha_vencimiento)}
+                    {e.pasarela && ` · ${PASARELAS[e.pasarela]}${e.referido ? " referido" : ""}`}
                   </span>
                 </td>
                 <td className="py-3 pr-3 whitespace-nowrap">
@@ -61,6 +65,11 @@ export function TablaEnvios({ filas, total, filtros, zona, moneda }: Props) {
                   </span>
                 </td>
                 <td className="max-w-72 py-3 pr-3 text-xs text-neutral-700">
+                  {e.respuesta && (
+                    <span className={`block font-semibold ${e.respuesta === "pago_realizado" ? "text-emerald-800" : "text-morado"}`}>
+                      Respondió: {RESPUESTAS[e.respuesta]}
+                    </span>
+                  )}
                   <span className="line-clamp-2" title={e.ultimo_error ?? undefined}>
                     {e.ultimo_error}
                   </span>

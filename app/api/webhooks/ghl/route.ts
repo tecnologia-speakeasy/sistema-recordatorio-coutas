@@ -1,11 +1,16 @@
 import { igualSeguro } from "@/lib/auth";
-import { consultarUno } from "@/lib/db";
-import { registrarEvento } from "@/lib/recordatorios/bitacora";
+import { registrarRespuesta } from "@/lib/recordatorios/interacciones";
+import { RESPUESTAS, type Respuesta } from "@/lib/recordatorios/tipos";
 
 /**
- * Confirmación opcional desde el workflow de GHL (acción "Webhook" después de
- * enviar el WhatsApp). URL: https://<app>/api/webhooks/ghl?secret=<GHL_WEBHOOK_SECRET>
- * Datos personalizados esperados: envio_id = {{contact.recordatorio_envio_id}}
+ * Respuestas a los botones de WhatsApp, informadas por la acción "Webhook" del
+ * workflow de GHL en la rama de cada botón.
+ *   URL:   https://<app>/api/webhooks/ghl?secret=<GHL_WEBHOOK_SECRET>
+ *   Datos: token     = {{inboundWebhookRequest.token}}
+ *          respuesta = pago_realizado | realizar_pago | soporte
+ *                      (también acepta el texto del botón: "Pago realizado")
+ * "Pago realizado" queda en el dashboard y en Google Sheets, y detiene los
+ * recordatorios restantes de esa cuota.
  */
 export async function POST(request: Request) {
   const secreto = process.env.GHL_WEBHOOK_SECRET;
@@ -21,30 +26,30 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "JSON inválido" }, { status: 400 });
   }
 
-  const envioId = extraerEnvioId(cuerpo);
-  if (!envioId) return Response.json({ ok: false, error: "Falta envio_id" }, { status: 422 });
+  // GHL manda los datos personalizados en `customData` (acción Webhook) o en la raíz.
+  const custom = (cuerpo.customData ?? {}) as Record<string, unknown>;
+  const token = texto(custom.token ?? cuerpo.token);
+  const respuesta = normalizarRespuesta(custom.respuesta ?? cuerpo.respuesta);
 
-  const envio = await consultarUno<{ id: string }>(
-    `UPDATE recordatorios.envios
-     SET confirmado_workflow_en = now()
-     WHERE id = $1 AND estado IN ('enviado', 'entregado', 'leido')
-     RETURNING id`,
-    [envioId],
-  );
-  if (!envio) return Response.json({ ok: false, error: "Envío no encontrado o no enviado" }, { status: 404 });
+  if (!/^[a-f0-9]{32}$/.test(token)) return Response.json({ ok: false, error: "Falta token" }, { status: 422 });
+  if (!respuesta) {
+    const validas = Object.keys(RESPUESTAS).join(", ");
+    return Response.json({ ok: false, error: `respuesta debe ser una de: ${validas}` }, { status: 422 });
+  }
 
-  await registrarEvento(envio.id, "webhook_workflow", {
-    contactId: cuerpo.contact_id ?? null,
-    workflow: (cuerpo.workflow as { name?: string } | undefined)?.name ?? null,
-  });
-  return Response.json({ ok: true });
+  const envioId = await registrarRespuesta(token, respuesta);
+  if (!envioId) return Response.json({ ok: false, error: "Envío no encontrado" }, { status: 404 });
+  return Response.json({ ok: true, envio_id: envioId });
 }
 
-/** GHL anida los datos personalizados de forma distinta según la acción; se buscan en ambos lugares. */
-function extraerEnvioId(cuerpo: Record<string, unknown>): string | null {
-  const custom = (cuerpo.customData ?? {}) as Record<string, unknown>;
-  const valor =
-    cuerpo.envio_id ?? custom.envio_id ?? cuerpo.recordatorio_envio_id ?? custom.recordatorio_envio_id;
-  const texto = typeof valor === "number" ? String(valor) : typeof valor === "string" ? valor.trim() : "";
-  return /^\d{1,18}$/.test(texto) ? texto : null;
+const texto = (valor: unknown) => (typeof valor === "string" ? valor.trim() : "");
+
+/** "Pago realizado" -> "pago_realizado" */
+function normalizarRespuesta(valor: unknown): Respuesta | null {
+  const clave = texto(valor)
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  return Object.hasOwn(RESPUESTAS, clave) ? (clave as Respuesta) : null;
 }

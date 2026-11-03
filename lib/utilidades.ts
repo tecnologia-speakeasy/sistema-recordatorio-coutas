@@ -12,36 +12,14 @@ export function esFechaIso(valor: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(valor) && !Number.isNaN(Date.parse(`${valor}T00:00:00Z`));
 }
 
-/**
- * Normaliza un celular a E.164. Acepta "+57 300 123 4567", "573001234567",
- * "3001234567" (asume el código de país por defecto) o "0057...".
- * Devuelve null si no parece un número válido.
- */
-export function normalizarTelefono(crudo: string | null | undefined, codigoPais: string): string | null {
-  if (!crudo) return null;
-  const limpio = crudo.trim();
-  let digitos = limpio.replace(/\D/g, "");
-  if (!digitos) return null;
-
-  if (limpio.startsWith("+")) {
-    // ya trae código de país
-  } else if (digitos.startsWith("00")) {
-    digitos = digitos.slice(2);
-  } else if (digitos.length <= 10) {
-    digitos = codigoPais + digitos.replace(/^0+/, "");
-  }
-
-  return digitos.length >= 10 && digitos.length <= 15 ? `+${digitos}` : null;
+/** "MARÍA FERNANDA LÓPEZ" -> "María" (para el saludo de la plantilla). */
+export function primerNombre(nombre: string | null | undefined): string {
+  const primero = (nombre ?? "").trim().split(/\s+/)[0] ?? "";
+  return primero ? primero.charAt(0).toLocaleUpperCase("es") + primero.slice(1).toLocaleLowerCase("es") : "";
 }
 
-export function formatearMoneda(valor: string | number | null, moneda = "COP"): string {
-  if (valor === null || valor === "") return "";
-  return new Intl.NumberFormat("es-CO", {
-    style: "currency",
-    currency: moneda,
-    maximumFractionDigits: 0,
-  }).format(Number(valor));
-}
+export const esUrlHttp = (valor: string | null | undefined): valor is string =>
+  !!valor && /^https?:\/\//i.test(valor) && URL.canParse(valor);
 
 /** '2026-11-20' -> '20 de noviembre' (sin desfase de zona horaria). */
 export function formatearFechaLarga(fechaIso: string): string {
