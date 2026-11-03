@@ -1,0 +1,97 @@
+{
+  "name": "Recordatorios de cuotas → Google Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "recordatorios-cuotas-0dda14707e303bc87656d2cb",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "c5ad3f91-f4fe-4129-a67e-3122b278a345",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "f1de332c-46a3-420a-8224-f784d0f82f9a"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "body.filas",
+        "options": {}
+      },
+      "id": "c458e43b-6150-474a-9626-41f70afd3793",
+      "name": "Separar filas",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Webhook').first().json.body.pestana }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "ID"
+          ],
+          "schema": []
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "11fbd3cc-90bd-4bd4-8c2d-c1ceae1cdf02",
+      "name": "Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        480,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Separar filas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar filas": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

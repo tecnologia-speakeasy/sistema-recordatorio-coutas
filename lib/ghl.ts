@@ -87,7 +87,13 @@ export function dispararWorkflow(urlWebhook: string, datos: DatosWorkflow): Prom
 // Lectura: contacto, conversación y estado del mensaje de WhatsApp
 // ---------------------------------------------------------------------------
 
-function api<T>(ruta: string): Promise<T> {
+/**
+ * Encabezado `Version` que documenta HighLevel para cada grupo de endpoints.
+ * No es uno solo: contactos y conversaciones van por versiones distintas.
+ */
+const VERSION_API = { contactos: "2021-07-28", conversaciones: "2021-04-15" } as const;
+
+function api<T>(ruta: string, version: string): Promise<T> {
   const config = configGhl();
   if (!config.GHL_TOKEN || !config.GHL_LOCATION_ID) {
     throw new Error("Falta GHL_TOKEN o GHL_LOCATION_ID para consultar GHL");
@@ -97,7 +103,7 @@ function api<T>(ruta: string): Promise<T> {
     {
       headers: {
         Authorization: `Bearer ${config.GHL_TOKEN}`,
-        Version: config.GHL_API_VERSION,
+        Version: version,
         Accept: "application/json",
       },
     },
@@ -112,7 +118,10 @@ export async function buscarContacto(telefono: string, email: string | null): Pr
   for (const criterio of criterios) {
     const params = new URLSearchParams({ locationId: GHL_LOCATION_ID ?? "", ...criterio });
     try {
-      const respuesta = await api<{ contact?: { id?: string } | null }>(`/contacts/search/duplicate?${params}`);
+      const respuesta = await api<{ contact?: { id?: string } | null }>(
+        `/contacts/search/duplicate?${params}`,
+        VERSION_API.contactos,
+      );
       if (respuesta?.contact?.id) return respuesta.contact.id;
     } catch (error) {
       if (!(error instanceof ErrorGhl && error.estadoHttp === 404)) throw error;
@@ -134,7 +143,10 @@ export interface MensajeGhl {
 export async function buscarConversacion(contactId: string): Promise<string | null> {
   const { GHL_LOCATION_ID } = configGhl();
   const params = new URLSearchParams({ locationId: GHL_LOCATION_ID ?? "", contactId, limit: "5" });
-  const { conversations } = await api<{ conversations: { id: string }[] }>(`/conversations/search?${params}`);
+  const { conversations } = await api<{ conversations: { id: string }[] }>(
+    `/conversations/search?${params}`,
+    VERSION_API.conversaciones,
+  );
   return conversations[0]?.id ?? null;
 }
 
@@ -142,6 +154,7 @@ export async function mensajesWhatsapp(conversationId: string): Promise<MensajeG
   const params = new URLSearchParams({ type: "TYPE_WHATSAPP", limit: "20" });
   const respuesta = await api<{ messages: { messages: MensajeGhl[] } }>(
     `/conversations/${encodeURIComponent(conversationId)}/messages?${params}`,
+    VERSION_API.conversaciones,
   );
   return respuesta.messages?.messages ?? [];
 }

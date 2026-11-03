@@ -2,7 +2,7 @@
 
 Envía por WhatsApp los recordatorios de pago de las cuotas de **Aprende Inglés con Speak Easy** a partir de la cartera (`public.cartera_*`, módulo Administrativo · Cartera de *inventario-speakeasy*). Registra cada envío en el esquema propio `recordatorios`, rastrea el clic en el link de pago y, 3 horas después, pregunta si pudo pagar. Además verifica la entrega real en GHL, refleja todo en Google Sheets y ofrece un dashboard para revisar y reenviar.
 
-Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin n8n ni SDKs externos.
+Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin SDKs externos; Google Sheets (opcional) va por un workflow de n8n.
 
 ---
 
@@ -197,15 +197,50 @@ Si el estudiante pagó por Hotmart o Stripe con el mismo correo, el webhook de c
 
 #### f) Token de solo lectura (recomendado)
 
-Un *Private Integration Token* (Settings → Private Integrations) con `contacts.readonly`, `conversations.readonly` y `conversations/message.readonly`, en `GHL_TOKEN` y `GHL_LOCATION_ID`. Con él, el sistema busca el contacto por teléfono y lee el estado real del WhatsApp: entregado, leído o fallido, y el motivo. Sin él, los envíos se quedan en *enviado* y no se detectan las fallas de WhatsApp.
+El envío no usa token. El token sirve solo para que el sistema **lea** en GHL si el WhatsApp se entregó, se leyó o falló, y por qué. Sin él, los envíos se quedan en *enviado*.
 
-### 5. Google Sheets (opcional)
+1. En la **subcuenta** de Speak Easy (no en la agencia): **Settings → Private Integrations → Create new Integration**.
+2. Nombre: `Recordatorios de cuotas (solo lectura)`.
+3. Permisos: solo estos tres (el buscador acepta el nombre o el código):
 
-1. En Google Cloud: habilita *Google Sheets API* y crea una cuenta de servicio con una llave JSON.
-2. Comparte la hoja con el email de la cuenta de servicio como **Editor**.
-3. Configura `GOOGLE_SHEETS_ID` (está en la URL de la hoja), `GOOGLE_SA_EMAIL` y `GOOGLE_SA_PRIVATE_KEY` (en una sola línea, con `\n`).
+   | Permiso | Código | Para qué |
+   |---|---|---|
+   | View Contacts | `contacts.readonly` | Encontrar al estudiante por teléfono o correo |
+   | View Conversations | `conversations.readonly` | Encontrar su conversación de WhatsApp |
+   | View Conversation Messages | `conversations/message.readonly` | Leer el estado del mensaje (entregado, leído, fallido) y el error |
 
-El sistema crea las pestañas **Cuota 2, Cuota 3…**, con **una fila por estudiante**. Cada fila tiene producto, fecha límite, correo, teléfono, método, el estado de cada etapa, los clics, la respuesta y **Pagó (reportado)**, y se actualiza en sitio. No ordenes ni borres filas de esas pestañas: para análisis usa vistas de filtro u otra pestaña con `QUERY()`. Los valores se escriben en modo `RAW`, así que ningún dato se interpreta como fórmula.
+   Ningún permiso de edición: el sistema no escribe nada en GHL.
+4. Crear y **copiar el token en ese momento**: GHL lo muestra una sola vez. Va en `GHL_TOKEN`.
+5. `GHL_LOCATION_ID`: es el ID que aparece en la URL de la subcuenta (`…/v2/location/<ID>/…`).
+
+Aunque sea de solo lectura, el token da acceso a contactos y conversaciones: trátalo como una contraseña. Si se expone, revócalo y crea otro desde la misma pantalla.
+
+### 5. Google Sheets con n8n (opcional)
+
+El sistema no se conecta a Google: envía las filas a un **webhook de n8n**, y n8n las escribe en la hoja con tu cuenta de Google.
+
+1. **La hoja**: crea una hoja de cálculo con 5 pestañas llamadas exactamente **Cuota 2**, **Cuota 3**, **Cuota 4**, **Cuota 5** y **Cuota 6**. En la celda A1 de cada una, pega los encabezados: abre [integraciones/encabezados-sheets.tsv](integraciones/encabezados-sheets.tsv) en VS Code, Ctrl+A, Ctrl+C y pega en A1; quedan repartidos en columnas.
+2. **El workflow**: en n8n, *Workflows → Import from File* → [integraciones/n8n-google-sheets.json](integraciones/n8n-google-sheets.json). Trae 3 nodos: *Webhook → Separar filas → Google Sheets*.
+3. **Nodo Google Sheets**, en este orden (al cambiar el documento, n8n vacía los campos de abajo):
+   - *Credential*: **Sign in with Google** con la cuenta dueña de la hoja.
+   - *Document*: elige la hoja en la lista o pega su URL.
+   - *Sheet*: cambia *From list* por **By Name**, pasa a **Expression** y pega `{{ $('Webhook').first().json.body.pestana }}`. Así cada lote va a su pestaña (Cuota 2, Cuota 3…).
+   - *Mapping Column Mode*: **Map Automatically**. *Column to match on*: **ID**. Si esa lista sale vacía es porque n8n aún no sabe qué pestaña es: envía primero la fila de prueba del paso 4.
+   - *Options → Add option → Cell Format*: **Let n8n format** (guarda los teléfonos con su `+` y las fechas tal cual).
+4. **Fila de prueba**: en el nodo Webhook, **Listen for test event**, y desde PowerShell envía una fila a la *Test URL*:
+   ```powershell
+   $prueba = '{"pestana":"Cuota 2","filas":[{"ID":"prueba","Nombre":"Fila de prueba"}]}'
+   Invoke-RestMethod -Method Post -Uri "PEGA_AQUI_LA_TEST_URL" -ContentType "application/json" -Body $prueba
+   ```
+   Con eso la expresión de *Sheet* ya resuelve "Cuota 2" y *Column to match on* muestra los encabezados. Elige **ID**, dale **Execute step** y revisa que la fila llegue a la pestaña Cuota 2. Luego bórrala de la hoja.
+5. **Activa** el workflow (*Publish* / *Active*) y copia la **Production URL** del nodo Webhook (no la de *Test*) en `SHEETS_WEBHOOK_URL`.
+6. En el dashboard, **Sincronizar Sheets**.
+
+Cada fila es un estudiante y una cuota: producto, fecha límite, correo, teléfono, método, descuento, el estado de cada mensaje, si tocó "Realizar pago", los clics, si pidió soporte, la última respuesta y si **reportó el pago**. Cuando algo cambia, n8n actualiza la fila por su **ID**, sin duplicarla. Si n8n o Google fallan, esas filas se reintentan en la siguiente ejecución.
+
+- La URL del webhook lleva un código aleatorio: trátala como una contraseña, porque con ella cualquiera podría escribir en la hoja.
+- No cambies los encabezados ni borres la columna **ID**. Sí puedes ordenar, filtrar y agregar columnas a la derecha.
+- En n8n Cloud, *Sign in with Google* funciona directo. En un n8n instalado por ustedes, esa conexión con Google requiere configurar un cliente OAuth en Google Cloud.
 
 ### 6. Cron
 
@@ -297,7 +332,7 @@ lib/
   db.ts                         pool pg + bloqueo con expiración
   ghl.ts                        webhook de workflows + lectura de contactos/conversaciones
   telefonos.ts                  normalización E.164 por país
-  sheets.ts                     cliente Google Sheets (JWT de cuenta de servicio, sin SDK)
+  sheets.ts                     envío de filas al webhook de n8n (Google Sheets)
   recordatorios/
     planificador.ts             higiene + planificación
     despachador.ts              reclamo concurrente, revalidación y envío
@@ -311,5 +346,9 @@ db/migraciones/
   002_vista_fuente.sql          vista sobre public.cartera_* (reglas de cobro)
   003_referidos_y_lanzamiento.sql  links del lanzamiento y de referido
   004_respuestas_y_ajustes.sql  botones respondidos y ajustes (link de soporte)
+  005_sheets_via_n8n.sql        Sheets vía n8n
+integraciones/
+  n8n-google-sheets.json        workflow de n8n para importar
+  encabezados-sheets.tsv        fila de encabezados de cada pestaña
 proxy.ts                        Basic Auth del dashboard
 ```

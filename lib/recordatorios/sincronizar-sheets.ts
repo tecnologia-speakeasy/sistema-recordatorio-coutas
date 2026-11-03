@@ -1,15 +1,13 @@
 import "server-only";
 import { configGeneral, configSheets } from "../config";
 import { conBloqueo, consultar } from "../db";
-import { actualizarFilas, anexarFilas, asegurarPestanas, type Celda } from "../sheets";
+import { enviarFilas, type FilaSheets } from "../sheets";
 import { ETIQUETAS_ESTADO, RESPUESTAS, type Etapa, type EstadoEnvio, type Respuesta } from "./tipos";
 
 interface CuotaSync {
   cuota_id: string;
   fecha_vencimiento: string;
   version: string; // max(actualizado_en) como texto, con microsegundos
-  fila: number | null;
-  pestana: string | null;
   cuota_numero: number;
   total_cuotas: number;
   producto: string | null;
@@ -30,11 +28,11 @@ interface CuotaSync {
 }
 
 /**
- * Refleja en Google Sheets una fila por cuota de estudiante, en pestañas
- * "Cuota 2", "Cuota 3"... con el estado de cada recordatorio, los clics y si
- * respondió "Pago realizado". Alta con append, cambios en sitio. Procesa solo
- * lo que cambió desde la última sincronización. No ordenes ni borres filas de
- * esas pestañas: usa vistas de filtro u otra pestaña con QUERY().
+ * Refleja en Google Sheets (vía n8n) una fila por cuota de estudiante, en
+ * pestañas "Cuota 2", "Cuota 3"... con el estado de cada recordatorio, los clics
+ * y las respuestas. n8n hace "Append or Update" por la columna ID, así que
+ * reenviar una fila la actualiza en su sitio. Solo envía lo que cambió desde la
+ * última sincronización; si n8n falla, esas filas se reintentan en la siguiente.
  */
 export async function sincronizarSheets(): Promise<number> {
   if (!configSheets()) return 0;
@@ -42,56 +40,36 @@ export async function sincronizarSheets(): Promise<number> {
 
   const total = await conBloqueo("sheets", 300, async () => {
     const etapas = await consultar<Etapa>("SELECT * FROM recordatorios.etapas ORDER BY orden");
-    const encabezados = [
-      "Producto", "Cuota", "Fecha límite", "Nombre", "Correo", "Teléfono", "País", "Método de pago", "Descuento",
-      ...etapas.map((e) => e.nombre),
-      "Tocó «Realizar pago»", "Clics en el link", "Primer clic", "Pidió soporte", "Respuesta", "Pagó (reportado)",
-      "Fecha del reporte", "Actualizado",
-    ];
-    const pestanasListas = new Set<string>();
     let sincronizadas = 0;
 
-    for (let vuelta = 0; vuelta < 10; vuelta++) {
+    for (let vuelta = 0; vuelta < 20; vuelta++) {
       const cuotas = await pendientes(APP_TIMEZONE);
       if (!cuotas.length) break;
 
-      const filas = cuotas.map((c) => ({
-        c,
-        pestana: c.pestana ?? `Cuota ${c.cuota_numero}`,
-        valores: valores(c, etapas),
-      }));
-
-      const porCrear = [...new Set(filas.map((f) => f.pestana))].filter((p) => !pestanasListas.has(p));
-      await asegurarPestanas(porCrear, encabezados);
-      porCrear.forEach((p) => pestanasListas.add(p));
-
-      const nuevas = filas.filter((f) => f.c.fila === null);
-      for (const pestana of new Set(nuevas.map((f) => f.pestana))) {
-        const delaPestana = nuevas.filter((f) => f.pestana === pestana);
-        const numeros = await anexarFilas(pestana, delaPestana.map((f) => f.valores));
-        delaPestana.forEach((f, i) => (f.c.fila = numeros[i]));
+      const porPestana = new Map<string, CuotaSync[]>();
+      for (const c of cuotas) {
+        const pestana = `Cuota ${c.cuota_numero}`;
+        porPestana.set(pestana, [...(porPestana.get(pestana) ?? []), c]);
       }
-      await actualizarFilas(
-        filas
-          .filter((f) => !nuevas.includes(f))
-          .map((f) => ({ pestana: f.pestana, fila: f.c.fila!, valores: f.valores })),
-      );
+      for (const [pestana, delaPestana] of porPestana) {
+        await enviarFilas(pestana, delaPestana.map((c) => fila(c, etapas)));
 
-      // Se marca con la versión leída: si la cuota cambió mientras tanto, vuelve a salir.
-      await consultar(
-        `INSERT INTO recordatorios.sheets_filas (cuota_id, fecha_vencimiento, pestana, fila, version)
-         SELECT * FROM unnest($1::text[], $2::date[], $3::text[], $4::int[], $5::timestamptz[])
-         ON CONFLICT (cuota_id, fecha_vencimiento)
-           DO UPDATE SET pestana = EXCLUDED.pestana, fila = EXCLUDED.fila, version = EXCLUDED.version`,
-        [
-          filas.map((f) => f.c.cuota_id),
-          filas.map((f) => f.c.fecha_vencimiento),
-          filas.map((f) => f.pestana),
-          filas.map((f) => f.c.fila),
-          filas.map((f) => f.c.version),
-        ],
-      );
-      sincronizadas += filas.length;
+        // Se marca con la versión leída: si la cuota cambió mientras tanto, vuelve a salir.
+        await consultar(
+          `INSERT INTO recordatorios.sheets_filas (cuota_id, fecha_vencimiento, pestana, version)
+           SELECT v.cuota_id, v.fecha_vencimiento, $3, v.version
+           FROM unnest($1::text[], $2::date[], $4::timestamptz[]) AS v (cuota_id, fecha_vencimiento, version)
+           ON CONFLICT (cuota_id, fecha_vencimiento)
+             DO UPDATE SET pestana = EXCLUDED.pestana, version = EXCLUDED.version`,
+          [
+            delaPestana.map((c) => c.cuota_id),
+            delaPestana.map((c) => c.fecha_vencimiento),
+            pestana,
+            delaPestana.map((c) => c.version),
+          ],
+        );
+        sincronizadas += delaPestana.length;
+      }
     }
     return sincronizadas;
   });
@@ -107,14 +85,13 @@ function pendientes(zona: string) {
        FROM recordatorios.envios
        GROUP BY cuota_id, fecha_vencimiento
      ), pend AS (
-       SELECT g.cuota_id, g.fecha_vencimiento, g.version, s.fila, s.pestana
+       SELECT g.cuota_id, g.fecha_vencimiento, g.version
        FROM g LEFT JOIN recordatorios.sheets_filas s USING (cuota_id, fecha_vencimiento)
        WHERE s.version IS NULL OR g.version > s.version
        ORDER BY g.fecha_vencimiento, g.cuota_id
-       LIMIT 300
+       LIMIT 100
      )
      SELECT p.cuota_id, p.fecha_vencimiento::text AS fecha_vencimiento, p.version::text AS version,
-            p.fila, p.pestana,
             u.cuota_numero, u.total_cuotas, u.producto, u.nombre, u.email,
             COALESCE(a.telefono_e164, u.telefono) AS telefono, u.pais, u.metodo_pago, u.descuento,
             a.estados, a.clicks, a.respuesta,
@@ -147,25 +124,30 @@ function pendientes(zona: string) {
   );
 }
 
-function valores(c: CuotaSync, etapas: Etapa[]): Celda[] {
-  return [
-    c.producto,
-    `${c.cuota_numero} de ${c.total_cuotas}`,
-    c.fecha_vencimiento,
-    c.nombre,
-    c.email,
-    c.telefono,
-    c.pais,
-    c.metodo_pago,
-    c.descuento,
-    ...etapas.map((e) => (c.estados[e.codigo] ? ETIQUETAS_ESTADO[c.estados[e.codigo]] : "")),
-    c.realizar_pago,
-    c.clicks,
-    c.primer_click,
-    c.soporte,
-    c.respuesta ? (RESPUESTAS[c.respuesta] ?? c.respuesta) : "",
-    c.pago_reportado ? "Sí" : "",
-    c.pago_reportado,
-    c.actualizado,
-  ];
+/**
+ * Una fila con los nombres de columna de la hoja (fila 1 de cada pestaña; ver
+ * integraciones/encabezados-sheets.tsv). n8n la ubica por "ID".
+ */
+function fila(c: CuotaSync, etapas: Etapa[]): FilaSheets {
+  return {
+    Producto: c.producto,
+    Cuota: `${c.cuota_numero} de ${c.total_cuotas}`,
+    "Fecha límite": c.fecha_vencimiento,
+    Nombre: c.nombre,
+    Correo: c.email,
+    Teléfono: c.telefono,
+    País: c.pais,
+    "Método de pago": c.metodo_pago,
+    Descuento: c.descuento,
+    ...Object.fromEntries(etapas.map((e) => [e.nombre, c.estados[e.codigo] ? ETIQUETAS_ESTADO[c.estados[e.codigo]] : ""])),
+    "Tocó Realizar pago": c.realizar_pago,
+    "Clics en el link": c.clicks,
+    "Primer clic": c.primer_click,
+    "Pidió soporte": c.soporte,
+    "Última respuesta": c.respuesta ? (RESPUESTAS[c.respuesta] ?? c.respuesta) : "",
+    "Reportó pago": c.pago_reportado ? "Sí" : "",
+    "Fecha del reporte": c.pago_reportado,
+    Actualizado: c.actualizado,
+    ID: `${c.cuota_id}|${c.fecha_vencimiento}`,
+  };
 }

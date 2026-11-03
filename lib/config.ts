@@ -41,14 +41,12 @@ const esquemaGhl = z.object({
   GHL_TOKEN: opcional,
   GHL_LOCATION_ID: opcional,
   GHL_API_URL: z.url().default("https://services.leadconnectorhq.com"),
-  GHL_API_VERSION: z.string().default("v3"),
   GHL_DRY_RUN: booleano,
 });
 
 const esquemaSheets = z.object({
-  GOOGLE_SHEETS_ID: z.string().min(1),
-  GOOGLE_SA_EMAIL: z.email(),
-  GOOGLE_SA_PRIVATE_KEY: z.string().min(1),
+  // Webhook de n8n (Webhook → Split Out → Google Sheets "Append or Update").
+  SHEETS_WEBHOOK_URL: z.url("SHEETS_WEBHOOK_URL debe ser la URL de producción del webhook de n8n"),
 });
 
 const esquemaSeguridad = z.object({
@@ -84,9 +82,8 @@ export function apiGhlConfigurada(): boolean {
   return Boolean(GHL_TOKEN && GHL_LOCATION_ID);
 }
 
+/** null = Google Sheets no está configurado (la sincronización se salta). */
 export function configSheets() {
-  if (!process.env.GOOGLE_SHEETS_ID) return null;
-  const config = cargar("Google Sheets", esquemaSheets);
-  // Las llaves PEM suelen guardarse en una sola línea con "\n" escapados.
-  return { ...config, GOOGLE_SA_PRIVATE_KEY: config.GOOGLE_SA_PRIVATE_KEY.replace(/\\n/g, "\n") };
+  if (!process.env.SHEETS_WEBHOOK_URL) return null;
+  return cargar("Google Sheets", esquemaSheets);
 }

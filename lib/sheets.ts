@@ -1,110 +1,41 @@
 import "server-only";
-import { createSign } from "node:crypto";
 import { configSheets } from "./config";
+import { esperar } from "./utilidades";
 
 /**
- * Cliente mínimo de Google Sheets API v4 con cuenta de servicio (JWT RS256),
- * sin dependencias. La hoja debe estar compartida como Editor con GOOGLE_SA_EMAIL.
- * Se usa valueInputOption=RAW para que ningún dato (p. ej. un nombre que empiece
- * por "=") se interprete como fórmula.
+ * Google Sheets a través de n8n. El sistema no habla con Google: envía las filas
+ * al webhook del workflow integraciones/n8n-google-sheets.json, que hace
+ * "Append or Update" por la columna ID con la cuenta de Google conectada en n8n.
+ *
+ * El nodo de Sheets de n8n escribe toda una ejecución en una sola pestaña, así
+ * que cada llamada lleva las filas de una sola pestaña.
  */
 
-const API = "https://sheets.googleapis.com/v4/spreadsheets";
-let tokenCache: { valor: string; expira: number } | null = null;
-
-const base64url = (entrada: string | Buffer) => Buffer.from(entrada).toString("base64url");
-
-async function tokenDeAcceso(email: string, llavePrivada: string): Promise<string> {
-  if (tokenCache && tokenCache.expira > Date.now() + 60_000) return tokenCache.valor;
-
-  const iat = Math.floor(Date.now() / 1000);
-  const encabezado = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const reclamos = base64url(
-    JSON.stringify({
-      iss: email,
-      scope: "https://www.googleapis.com/auth/spreadsheets",
-      aud: "https://oauth2.googleapis.com/token",
-      iat,
-      exp: iat + 3600,
-    }),
-  );
-  const firma = createSign("RSA-SHA256").update(`${encabezado}.${reclamos}`).sign(llavePrivada);
-  const assertion = `${encabezado}.${reclamos}.${base64url(firma)}`;
-
-  const respuesta = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion }),
-    cache: "no-store",
-  });
-  if (!respuesta.ok) throw new Error(`Google OAuth ${respuesta.status}: ${await respuesta.text()}`);
-
-  const { access_token, expires_in } = (await respuesta.json()) as { access_token: string; expires_in: number };
-  tokenCache = { valor: access_token, expira: Date.now() + expires_in * 1000 };
-  return access_token;
-}
-
-async function llamar<T>(metodo: "GET" | "POST" | "PUT", ruta: string, cuerpo?: unknown): Promise<T> {
-  const config = configSheets();
-  if (!config) throw new Error("Google Sheets no está configurado");
-  const token = await tokenDeAcceso(config.GOOGLE_SA_EMAIL, config.GOOGLE_SA_PRIVATE_KEY);
-
-  const respuesta = await fetch(`${API}/${config.GOOGLE_SHEETS_ID}${ruta}`, {
-    method: metodo,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: cuerpo !== undefined ? JSON.stringify(cuerpo) : undefined,
-    cache: "no-store",
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!respuesta.ok) throw new Error(`Google Sheets ${metodo} ${ruta} -> ${respuesta.status}: ${await respuesta.text()}`);
-  return (await respuesta.json()) as T;
-}
-
-/** Notación A1 con la pestaña escapada: 'Mi pestaña'!A1 */
-const a1 = (pestana: string, celdas: string) => `'${pestana.replace(/'/g, "''")}'!${celdas}`;
-const rango = (pestana: string, celdas: string) => encodeURIComponent(a1(pestana, celdas));
-
 export type Celda = string | number | null;
+export type FilaSheets = Record<string, Celda>;
 
-/** Crea las pestañas que falten y deja la fila 1 con los encabezados actuales. */
-export async function asegurarPestanas(nombres: string[], encabezados: string[]): Promise<void> {
-  const unicas = [...new Set(nombres)];
-  if (!unicas.length) return;
-
-  const { sheets } = await llamar<{ sheets: { properties: { title: string } }[] }>("GET", "?fields=sheets.properties.title");
-  const existentes = new Set(sheets.map((h) => h.properties.title));
-  const faltantes = unicas.filter((n) => !existentes.has(n));
-  if (faltantes.length) {
-    await llamar("POST", ":batchUpdate", {
-      requests: faltantes.map((title) => ({ addSheet: { properties: { title, gridProperties: { frozenRowCount: 1 } } } })),
-    });
-  }
-
-  await llamar("POST", "/values:batchUpdate", {
-    valueInputOption: "RAW",
-    data: unicas.map((pestana) => ({ range: a1(pestana, "A1"), values: [encabezados] })),
-  });
-}
-
-/** Agrega filas al final y devuelve el número de fila asignado a cada una. */
-export async function anexarFilas(pestana: string, filas: Celda[][]): Promise<number[]> {
-  const respuesta = await llamar<{ updates: { updatedRange: string } }>(
-    "POST",
-    `/values/${rango(pestana, "A1")}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
-    { values: filas },
-  );
-  const inicio = Number(/![A-Z]+(\d+)/.exec(respuesta.updates.updatedRange)?.[1]);
-  if (!Number.isFinite(inicio)) throw new Error(`Rango inesperado de Sheets: ${respuesta.updates.updatedRange}`);
-  return filas.map((_, i) => inicio + i);
-}
-
-export async function actualizarFilas(filas: { pestana: string; fila: number; valores: Celda[] }[]): Promise<void> {
+export async function enviarFilas(pestana: string, filas: FilaSheets[]): Promise<void> {
   if (!filas.length) return;
-  await llamar("POST", "/values:batchUpdate", {
-    valueInputOption: "RAW",
-    data: filas.map(({ pestana, fila, valores }) => ({
-      range: a1(pestana, `A${fila}`),
-      values: [valores],
-    })),
-  });
+  const config = configSheets();
+  if (!config) throw new Error("Google Sheets no está configurado (SHEETS_WEBHOOK_URL)");
+
+  for (let intento = 1; ; intento++) {
+    const respuesta = await fetch(config.SHEETS_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pestana, filas }),
+      cache: "no-store",
+      // n8n responde cuando Google Sheets terminó de escribir.
+      signal: AbortSignal.timeout(90_000),
+    });
+    if (respuesta.ok) return;
+
+    const reintentable = respuesta.status === 429 || respuesta.status >= 500;
+    if (reintentable && intento < 3) {
+      await esperar(3000 * intento);
+      continue;
+    }
+    const detalle = (await respuesta.text()).slice(0, 300);
+    throw new Error(`n8n (Google Sheets, pestaña "${pestana}") -> ${respuesta.status}: ${detalle || respuesta.statusText}`);
+  }
 }
