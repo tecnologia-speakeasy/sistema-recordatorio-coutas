@@ -35,6 +35,18 @@ export const RESPUESTAS = {
 
 export type Respuesta = keyof typeof RESPUESTAS;
 
+/**
+ * Lo que informa el workflow (por el mismo webhook de respuestas) cuando "Find
+ * Contact" no encuentra el correo del estudiante en GHL. No es un botón.
+ */
+export const AVISO_SIN_CONTACTO = "contacto_no_encontrado";
+
+/**
+ * Inicio de `ultimo_error` de los envíos que no salieron porque GHL no tiene el
+ * contacto (o cartera no tiene correo): así los separa el panel de alertas.
+ */
+export const PREFIJO_SIN_CONTACTO = "Sin contacto en GHL";
+
 export const PASARELAS = { hotmart: "Hotmart", stripe: "Stripe" } as const;
 export type Pasarela = keyof typeof PASARELAS;
 

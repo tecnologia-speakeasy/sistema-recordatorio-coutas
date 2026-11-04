@@ -21,6 +21,10 @@ export function primerNombre(nombre: string | null | undefined): string {
 export const esUrlHttp = (valor: string | null | undefined): valor is string =>
   !!valor && /^https?:\/\//i.test(valor) && URL.canParse(valor);
 
+/** Forma básica de un correo (usuario@dominio.ext), sin espacios. */
+export const esCorreo = (valor: string | null | undefined): valor is string =>
+  !!valor && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(valor);
+
 /** '2026-11-20' -> '20 de noviembre' (sin desfase de zona horaria). */
 export function formatearFechaLarga(fechaIso: string): string {
   return new Intl.DateTimeFormat("es-CO", { day: "numeric", month: "long", timeZone: "UTC" }).format(

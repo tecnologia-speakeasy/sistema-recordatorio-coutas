@@ -4,6 +4,7 @@ import { consultar } from "../db";
 import { buscarContacto, buscarConversacion, mensajesWhatsapp, type MensajeGhl } from "../ghl";
 import { mensajeDeError } from "../utilidades";
 import { registrarEvento } from "./bitacora";
+import { errorSinContacto, marcarSinContacto } from "./interacciones";
 import { ETAPA_SEGUIMIENTO, type Envio } from "./tipos";
 
 /** Si tras este tiempo el workflow no generó mensaje de WhatsApp, el envío se marca fallido. */
@@ -20,7 +21,7 @@ export async function verificarEntregas(): Promise<number> {
   const envios = await consultar<Envio>(
     `SELECT * FROM recordatorios.envios
      WHERE estado IN ('enviado', 'entregado')
-       AND NOT simulado AND telefono_e164 IS NOT NULL
+       AND NOT simulado AND NULLIF(btrim(email), '') IS NOT NULL
        AND enviado_en BETWEEN now() - interval '72 hours' AND now() - interval '1 minute'
      ORDER BY enviado_en
      LIMIT $1`,
@@ -40,22 +41,29 @@ export async function verificarEntregas(): Promise<number> {
 }
 
 async function verificarEnvio(envio: Envio): Promise<boolean> {
-  // El workflow encuentra (o crea) el contacto; aquí solo se busca, sin modificarlo.
-  const contacto = envio.ghl_contact_id ?? (await buscarContacto(envio.telefono_e164!, envio.email));
+  // El workflow busca el contacto por correo (sin crearlo); aquí igual, sin modificarlo.
+  const contacto = envio.ghl_contact_id ?? (await buscarContacto(envio.email!.trim()));
   const conversacion = contacto ? (envio.ghl_conversation_id ?? (await buscarConversacion(contacto))) : null;
   const mensaje = contacto && conversacion ? await localizarMensaje(envio, contacto, conversacion) : null;
 
   if (!mensaje) {
     const minutos = (Date.now() - envio.enviado_en!.getTime()) / 60_000;
     if (envio.estado === "enviado" && minutos > MINUTOS_SIN_MENSAJE) {
-      const error = !contacto
-        ? `GHL no tiene un contacto con el teléfono ${envio.telefono_e164}. Revisa el paso que busca ` +
-          "o crea el contacto en el workflow."
-        : envio.etapa === ETAPA_SEGUIMIENTO
+      if (!contacto) {
+        await marcarSinContacto(envio.id, errorSinContacto(envio.email), {
+          origen: "verificacion",
+          email: envio.email,
+          minutos: Math.round(minutos),
+        });
+        return true;
+      }
+      const error =
+        envio.etapa === ETAPA_SEGUIMIENTO
           ? "GHL no envió el seguimiento. Lo más probable es que la ventana de 24 h ya estuviera cerrada " +
             "(el estudiante no había respondido en el último día)."
           : "GHL no registró un mensaje de WhatsApp para este envío. Revisa el workflow " +
-            "(re-entrada permitida, plantilla aprobada, acción de WhatsApp activa).";
+            "(re-entrada permitida, plantilla aprobada, acción de WhatsApp activa) y que el contacto " +
+            "tenga un teléfono con WhatsApp.";
       await actualizar(envio.id, "fallido", { contacto, conversacion, mensajeId: null, error });
       await registrarEvento(envio.id, "estado_ghl", { estado: "sin_mensaje", contacto, minutos: Math.round(minutos) });
       return true;

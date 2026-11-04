@@ -7,7 +7,13 @@ const MAX_FILAS = 50;
 const TEXTOS: Record<ClaveAlerta, { titulo: string; descripcion: string; urgente?: boolean }> = {
   whatsapp_fallido: {
     titulo: "WhatsApp que fallaron",
-    descripcion: "No llegaron: teléfono inválido, falta el link, error de GHL o de WhatsApp. Se pueden reenviar.",
+    descripcion: "No llegaron: falta el link, error de GHL o de WhatsApp (número sin WhatsApp…). Se pueden reenviar.",
+    urgente: true,
+  },
+  sin_contacto_ghl: {
+    titulo: "Sin contacto en GHL",
+    descripcion:
+      "GHL no encontró su correo y el WhatsApp no salió. Crea el contacto en GHL (o corrige el correo en cartera) y reenvía.",
     urgente: true,
   },
   reporto_sin_registro: {
@@ -81,7 +87,7 @@ export function Alertas({ alertas, filtros, zona }: { alertas: Alerta[]; filtros
               {filas.length > MAX_FILAS && (
                 <p className="mt-2 text-xs text-neutral-600">Se muestran {MAX_FILAS} de {filas.length}.</p>
               )}
-              {clave === "whatsapp_fallido" && filas.length > 0 && (
+              {(clave === "whatsapp_fallido" || clave === "sin_contacto_ghl") && filas.length > 0 && (
                 <Link
                   href={`/?${new URLSearchParams({ desde: filtros.desde, hasta: filtros.hasta, estado: "fallido" })}`}
                   className="mt-2 inline-block text-xs font-semibold text-morado underline"

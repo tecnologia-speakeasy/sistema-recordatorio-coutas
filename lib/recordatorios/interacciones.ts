@@ -3,7 +3,7 @@ import { configGeneral } from "../config";
 import { consultar, consultarUno } from "../db";
 import { mensajeDeError } from "../utilidades";
 import { registrarEvento } from "./bitacora";
-import { ETAPA_SEGUIMIENTO, type Respuesta } from "./tipos";
+import { ETAPA_SEGUIMIENTO, PREFIJO_SIN_CONTACTO, type Respuesta } from "./tipos";
 
 /**
  * Clic en el link rastreado (https://<app>/p/<token>). Devuelve el link de pago
@@ -116,6 +116,37 @@ export async function registrarRespuesta(token: string, respuesta: Respuesta): P
   );
   if (fila) await registrarEvento(fila.id, "respuesta", { respuesta });
   return fila?.id ?? null;
+}
+
+/** `ultimo_error` cuando GHL no tiene un contacto con el correo del estudiante. */
+export const errorSinContacto = (email: string | null) =>
+  `${PREFIJO_SIN_CONTACTO}: no hay un contacto con el correo ${email || "(vacío)"}. ` +
+  "Créalo en GHL o corrige el correo en cartera, y reenvía.";
+
+/** El WhatsApp no salió por falta de contacto en GHL: el envío queda fallido, en su propia alerta. */
+export async function marcarSinContacto(envioId: string, mensaje: string, detalle: Record<string, unknown>) {
+  await consultar(
+    `UPDATE recordatorios.envios
+     SET estado = 'fallido', procesando_desde = NULL, ultimo_error = $2
+     WHERE id = $1`,
+    [envioId, mensaje.slice(0, 1000)],
+  );
+  await registrarEvento(envioId, "sin_contacto", detalle);
+}
+
+/**
+ * "Find Contact" no encontró el correo del estudiante en GHL, así que el workflow
+ * terminó sin enviar el WhatsApp (acción Webhook de la rama "no encontrado").
+ * Un envío aún 'pendiente' no se toca: el aviso sería de un intento anterior.
+ */
+export async function registrarSinContacto(token: string): Promise<string | null> {
+  const envio = await consultarUno<{ id: string; email: string | null }>(
+    "SELECT id, email FROM recordatorios.envios WHERE token = $1 AND estado <> 'pendiente'",
+    [token],
+  );
+  if (!envio) return null;
+  await marcarSinContacto(envio.id, errorSinContacto(envio.email), { origen: "workflow", email: envio.email });
+  return envio.id;
 }
 
 /** ¿El estudiante ya dijo "Pago realizado" para esta cuota? */

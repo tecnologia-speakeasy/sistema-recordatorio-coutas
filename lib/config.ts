@@ -29,8 +29,8 @@ const esquemaGeneral = z.object({
   HORA_FIN_ENVIO: z.coerce.number().int().min(1).max(24).default(20),
   // Tiempo máximo que una ejecución dedica a despachar (debe ser < maxDuration del endpoint).
   PRESUPUESTO_EJECUCION_SEG: z.coerce.number().int().min(10).default(240),
-  // Separación mínima entre dos envíos al mismo teléfono, para que la verificación
-  // asocie cada mensaje de WhatsApp a su envío.
+  // Separación mínima entre dos envíos al mismo contacto (mismo correo), para que la
+  // verificación asocie cada mensaje de WhatsApp a su envío.
   ESPERA_MISMO_CONTACTO_SEG: z.coerce.number().int().min(0).default(60),
   // Horas entre el primer clic en el link de pago y el mensaje de seguimiento.
   SEGUIMIENTO_HORAS: z.coerce.number().min(0).max(72).default(3),

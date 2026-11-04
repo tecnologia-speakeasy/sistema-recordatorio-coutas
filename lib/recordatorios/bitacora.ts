@@ -11,6 +11,7 @@ export type TipoEvento =
   | "programado"
   | "seguimiento_programado"
   | "respuesta"
+  | "sin_contacto"
   | "reenvio_manual"
   | "recuperado";
 

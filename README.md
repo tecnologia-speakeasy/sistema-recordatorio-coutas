@@ -9,7 +9,7 @@ Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin S
 ## Cómo funciona
 
 ```
-                 ┌────────────── cron (cada hora 8–19 h) ──────────────┐
+                 ┌──────────── cron (cada 15 min, 8–19:45 h) ───────────┐
                  ▼                                                       │
   GET /api/cron/recordatorios  (Bearer CRON_SECRET)                      │
         │                                                                │
@@ -23,14 +23,15 @@ Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin S
   Link de pago que recibe el estudiante:  APP_URL/p/<token>
         └─► registra el clic ─► programa el seguimiento (+3 h) ─► 302 a Hotmart/Stripe
 
-  Botones de WhatsApp ("Pago realizado", "Soporte"):  workflow ─► POST /api/webhooks/ghl
+  Botones de WhatsApp ("Pago realizado", "Soporte") y
+  correo que no está en GHL ("contacto_no_encontrado"):  workflow ─► POST /api/webhooks/ghl
 ```
 
-**En GHL no se crean campos ni se modifican contactos.** Cada etapa tiene su workflow con disparador *Inbound Webhook*: el sistema le envía los datos del recordatorio y el workflow los usa como `{{inboundWebhookRequest.campo}}`.
+**En GHL no se crean campos, ni se crean o modifican contactos.** Cada etapa tiene su workflow con disparador *Inbound Webhook*: el sistema le envía los datos del recordatorio y el workflow los usa como `{{inboundWebhookRequest.campo}}`. El workflow busca al estudiante **por correo**, y el WhatsApp sale al teléfono que tiene ese contacto en GHL; por eso el teléfono de cartera es opcional. Si GHL no tiene el correo, el workflow avisa y el envío queda en la alerta **Sin contacto en GHL**.
 
 ### ¿Se necesita un cron?
 
-Sí. Lo recomendable es **cada hora dentro de la ventana de envío**:
+Sí. Lo recomendable es **cada 15 minutos (o cada hora) dentro de la ventana de envío**:
 
 - el día 17 salen todos los D-3 de la generación a la vez, y si no alcanzan en una ejecución la siguiente continúa;
 - los seguimientos salen 3 h después de cada clic, así que hace falta revisar a lo largo del día;
@@ -133,7 +134,8 @@ Al tocar un botón, el estudiante le escribe a la cuenta y se abre la **ventana 
 | `link_pago` | `https://APP_URL/p/3a7d…` | URL del botón *Pagar ahora* (link rastreado) |
 | `link_soporte` | `https://wa.me/57…` | URL del botón *Hablar con soporte* |
 | `token` | `3a7d…` | Dato que devuelven los webhooks de respuesta (ver (e)) |
-| `telefono` / `email` | `+13055551001` | Buscar el contacto |
+| `email` | `maria@correo.com` | Buscar el contacto (*Find Contact* por correo) |
+| `telefono` | `+13055551001` o vacío | Solo referencia: el WhatsApp sale al teléfono del contacto en GHL |
 | `nombre`, `concepto`, `cuota`, `total_cuotas`, `fecha_limite`, `metodo_pago`, `pasarela`, `producto`, `etapa`, `plantilla`, `envio_id` | `Cuota 2 de 4`, `20 de noviembre`… | Opcionales |
 
 `link_pago` y `token` llevan a la misma página, que registra el clic, programa el seguimiento y redirige al link de Hotmart/Stripe que corresponda.
@@ -159,7 +161,9 @@ Con cualquiera de los dos, el paso **Esperar respuesta** debe vencer antes del s
    ```powershell
    Invoke-RestMethod -Method Post -Uri "URL_DEL_WEBHOOK" -ContentType "application/json; charset=utf-8" -InFile "integraciones\ghl-ejemplo-webhook.json"
    ```
-2. **Buscar el contacto** (*Find Contact*) por `{{inboundWebhookRequest.telefono}}` (y si no aparece, por `email`). GHL exige un contacto para enviar WhatsApp. Si no existe, créalo solo con teléfono, email y nombre.
+2. **Buscar el contacto** (*Find Contact*) por **correo** = `{{inboundWebhookRequest.email}}`. No se crean contactos:
+   - *Encontrado* → sigue al paso 3.
+   - *No encontrado* → **Webhook** con `respuesta` = `contacto_no_encontrado` (ver (e)) → fin. El envío queda *fallido* en la alerta **Sin contacto en GHL**: crea el contacto en GHL (o corrige el correo en cartera) y reenvía desde el dashboard.
 3. **WhatsApp** con la plantilla de la etapa y `{{1}}` = `primer_nombre`.
 4. **Esperar respuesta** (máx. 20 h) y ramificar por el botón. Si la acción de la plantilla ya muestra una rama por botón y una de *Timeout*, úsalas. Si no, agrega **Wait → Contact Reply** (20 h) y un **If/Else** sobre el texto de la respuesta ("Realizar pago" / "Soporte").
    - *Realizar pago* → **Webhook** `realizar_pago` (ver (e)) → mensaje **Pago** (ver (a)).
@@ -175,17 +179,24 @@ Arma D-3 completo y **duplícalo** para D-1, D0 y D+1. En cada copia cambia la p
 Workflow SEG:
 
 1. Disparador *Inbound Webhook*; su URL va en la etapa SEG del panel.
-2. Buscar el contacto.
+2. Buscar el contacto por correo, igual que en (d): si no aparece, **Webhook** `contacto_no_encontrado` → fin.
 3. *WhatsApp: Customer Service Window Check*. Si la ventana está cerrada → fin.
 4. Mensaje **Seguimiento** (ver (a)): *WhatsApp Interactive Message* de tipo **Quick Reply Buttons**, con los botones **Pago realizado** y **Soporte** y *Timeout* de 20 h. Cada botón sale por su rama:
    - *Pago realizado* → **Webhook** `pago_realizado` → mensaje **Felicitación** (acción *WhatsApp* con texto normal, sin plantilla: la ventana está abierta).
    - *Soporte* → **Webhook** `soporte` → mensaje **Soporte**.
    - *Timeout* → fin.
 
-**Webhooks de respuesta.** Son la acción *Webhook* de GHL, en todas las ramas de botón de los 5 workflows:
+**Webhooks de respuesta.** Son la acción *Webhook* de GHL, en todas las ramas de botón de los 5 workflows y en la rama *No encontrado* de *Find Contact*:
 
 - URL: `POST https://APP_URL/api/webhooks/ghl?secret=GHL_WEBHOOK_SECRET`
-- Datos personalizados: `token` = `{{inboundWebhookRequest.token}}`, `respuesta` = `realizar_pago`, `soporte` o `pago_realizado`
+- Datos personalizados: `token` = `{{inboundWebhookRequest.token}}` y `respuesta` =
+
+  | Rama | `respuesta` |
+  |---|---|
+  | Botón *Realizar pago* | `realizar_pago` |
+  | Botón *Soporte* | `soporte` |
+  | Botón *Pago realizado* | `pago_realizado` |
+  | *Find Contact* → no encontrado | `contacto_no_encontrado` |
 
 Con ellos el sistema sabe quién tocó cada botón y cuándo se abrió la ventana de 24 h, y arma el panel **Requieren atención**. "Pago realizado" además detiene los recordatorios restantes de esa cuota.
 
@@ -208,7 +219,7 @@ El envío no usa token. El token sirve solo para que el sistema **lea** en GHL s
 
    | Permiso | Código | Para qué |
    |---|---|---|
-   | View Contacts | `contacts.readonly` | Encontrar al estudiante por teléfono o correo |
+   | View Contacts | `contacts.readonly` | Encontrar al estudiante por correo |
    | View Conversations | `conversations.readonly` | Encontrar su conversación de WhatsApp |
    | View Conversation Messages | `conversations/message.readonly` | Leer el estado del mensaje (entregado, leído, fallido) y el error |
 
@@ -249,19 +260,29 @@ Cada fila es un estudiante y una cuota: producto, fecha límite, correo, teléfo
 
 El endpoint acepta `GET` o `POST` con `Authorization: Bearer $CRON_SECRET`.
 
-- **Vercel**: [vercel.json](vercel.json) lo programa cada hora de 8:00 a 19:00 (hora de Bogotá; Vercel usa UTC). Define `CRON_SECRET` en el proyecto y Vercel enviará el header automáticamente. Si tu plan solo permite ejecuciones diarias, usa un programador externo.
+- **Vercel**: [vercel.json](vercel.json) lo programa cada 15 minutos de 8:00 a 19:45 (hora de Bogotá). Define `CRON_SECRET` en el proyecto y Vercel enviará el header automáticamente. Si tu plan solo permite ejecuciones diarias, usa un programador externo.
+
+  Para cambiar la frecuencia, reemplaza la línea `"schedule"` de [vercel.json](vercel.json) por una de estas (las horas `0,13-23` están en UTC y equivalen a 8:00–19:00 en Bogotá; no las cambies). `vercel.json` no admite comentarios: si le agregas uno, el deploy falla.
+
+  | Frecuencia | Línea para pegar | Seguimiento sale tras el clic |
+  |---|---|---|
+  | Cada 15 minutos (actual) | `"schedule": "*/15 0,13-23 * * *"` | entre 3 h y 3 h 15 min |
+  | Cada 30 minutos | `"schedule": "*/30 0,13-23 * * *"` | entre 3 h y 3 h 30 min |
+  | Cada hora | `"schedule": "0 0,13-23 * * *"` | entre 3 h y 4 h |
+
+  El cambio se aplica con el siguiente deploy (commit y push). Se confirma en Vercel → *Settings → Cron Jobs*.
 - **VPS / externo** (crontab, cron-job.org, GitHub Actions):
 
   ```cron
   CRON_TZ=America/Bogota
-  0 8-19 * * * curl -fsS -m 310 -H "Authorization: Bearer $CRON_SECRET" https://APP_URL/api/cron/recordatorios > /dev/null
+  */15 8-19 * * * curl -fsS -m 310 -H "Authorization: Bearer $CRON_SECRET" https://APP_URL/api/cron/recordatorios > /dev/null
   ```
 
 Respuestas: `200` correcto, `500` con detalle en `errores`, `409` si ya hay otra ejecución en curso.
 
 ### 7. Prueba antes de producción
 
-1. Con `GHL_DRY_RUN=true`, simula el día 17: `curl -H "Authorization: Bearer $CRON_SECRET" "https://APP_URL/api/cron/recordatorios?fecha=2026-11-17"`. En el dashboard revisa a quién se planificó y qué falló: teléfonos inválidos o links faltantes. La bitácora de cada envío muestra los datos que se habrían mandado a GHL.
+1. Solo con `GHL_DRY_RUN=true` (con `false` enviaría de verdad a todos los estudiantes de esa fecha), simula el día 17: `curl -H "Authorization: Bearer $CRON_SECRET" "https://APP_URL/api/cron/recordatorios?fecha=2026-11-17"`. En el dashboard revisa a quién se planificó y qué falló: correos faltantes o links faltantes. La bitácora de cada envío muestra los datos que se habrían mandado a GHL.
 2. Con `GHL_DRY_RUN=false`, prueba los workflows con tu número usando el `curl` del punto 4d.
 
 ---
@@ -272,7 +293,8 @@ Protegido con HTTP Basic (`DASHBOARD_USUARIO` / `DASHBOARD_CLAVE`). Las server a
 
 - **KPIs del rango**: enviados, entregados, leídos, fallidos, omitidos, clics en el link (y cuántos tocaron "Realizar pago"), "Pago realizado" y cuotas que ya figuran pagadas en cartera.
 - **Requieren atención**: tarjetas con la lista de estudiantes (nombre, teléfono, correo, cuota) que piden una acción del equipo:
-  - **WhatsApp que fallaron**: teléfono inválido, falta el link, error de GHL o de WhatsApp.
+  - **WhatsApp que fallaron**: falta el link, error de GHL o de WhatsApp (por ejemplo, el contacto no tiene un número con WhatsApp).
+  - **Sin contacto en GHL**: GHL no encontró el correo del estudiante (o cartera no tiene correo), así que el WhatsApp no salió. Se crea el contacto en GHL o se corrige el correo, y se reenvía.
   - **Dijo «Pago realizado» y no figura en cartera**: verificar y registrar el pago.
   - **Pidió soporte**.
   - **Tocó «Realizar pago» y no abrió el link**.
@@ -300,11 +322,11 @@ Protegido con HTTP Basic (`DASHBOARD_USUARIO` / `DASHBOARD_CLAVE`). Las server a
 ## Detalles implementados
 
 - **Idempotencia**: la planificación usa `ON CONFLICT DO NOTHING` y el despacho reclama filas con `UPDATE … WHERE estado = 'pendiente'`, así que dos ejecuciones simultáneas no duplican mensajes. Un bloqueo por filas en `recordatorios.bloqueos` evita ciclos solapados y funciona detrás de PgBouncer, Supabase o Neon.
-- **Teléfonos**: se normalizan a E.164 según el país de la compra (`lib/telefonos.ts`). Acepta "+1 305…", "1 (305) 555-1001", "573001234567", "3001234567" o "0987654321" (Ecuador)…
-- **Mismo teléfono**: dos mensajes al mismo número (comparando los últimos 10 dígitos) se separan al menos `ESPERA_MISMO_CONTACTO_SEG`, para que la verificación asocie cada WhatsApp a su envío.
+- **Contacto por correo**: el correo de cartera es obligatorio (sin él, el envío queda en *Sin contacto en GHL* sin llamar a GHL). El teléfono es opcional: si viene, se normaliza a E.164 según el país de la compra (`lib/telefonos.ts`) y se manda como referencia. Acepta "+1 305…", "1 (305) 555-1001", "573001234567", "3001234567" o "0987654321" (Ecuador)…
+- **Mismo contacto**: dos mensajes al mismo correo se separan al menos `ESPERA_MISMO_CONTACTO_SEG`, para que la verificación asocie cada WhatsApp a su envío.
 - **Sin envíos tardíos**: un recordatorio que no salió en su día pasa a *omitido* (un "faltan 3 días" no se envía después). Un seguimiento se omite si lleva más de un día vencido. Ambos se pueden reenviar a mano.
 - **Interrumpidos**: un envío en *procesando* por más de 15 min pasa a *fallido* y no se reintenta solo, porque pudo llegar a GHL. Revísalo en GHL antes de reenviar.
-- **Verificación**: se revisan los envíos de las últimas 72 h. Si a las 2 h no hay contacto o mensaje de WhatsApp en GHL, se marca *fallido* con indicaciones.
+- **Verificación**: se revisan los envíos de las últimas 72 h; el contacto se busca por correo, como en el workflow. Si a las 2 h no hay contacto (va a *Sin contacto en GHL*, aunque el workflow no haya avisado) o mensaje de WhatsApp en GHL, se marca *fallido* con indicaciones.
 - **Clics**: las vistas previas de enlaces (WhatsApp, Facebook, bots) redirigen pero no cuentan como clic ni programan seguimiento. Si cambias un link en el dashboard, los mensajes ya enviados redirigen al nuevo.
 
 ## Seguridad

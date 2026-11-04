@@ -10,7 +10,7 @@ import { esperar } from "./utilidades";
  * workflow los usa como {{inboundWebhookRequest.<campo>}} en la plantilla. No se
  * crean campos personalizados ni se modifican contactos desde aquí.
  *
- * Lectura (opcional, con GHL_TOKEN): se busca el contacto por teléfono y se lee
+ * Lectura (opcional, con GHL_TOKEN): se busca el contacto por correo y se lee
  * su conversación para conocer el estado real del mensaje de WhatsApp.
  */
 
@@ -111,23 +111,20 @@ function api<T>(ruta: string, version: string): Promise<T> {
   );
 }
 
-/** Contacto que el workflow usó para enviar: se busca por teléfono y, si no aparece, por email. */
-export async function buscarContacto(telefono: string, email: string | null): Promise<string | null> {
+/** Contacto que el workflow usó para enviar: el workflow lo busca por correo, aquí igual. */
+export async function buscarContacto(email: string): Promise<string | null> {
   const { GHL_LOCATION_ID } = configGhl();
-  const criterios: Record<string, string>[] = [{ number: telefono }, ...(email ? [{ email }] : [])];
-  for (const criterio of criterios) {
-    const params = new URLSearchParams({ locationId: GHL_LOCATION_ID ?? "", ...criterio });
-    try {
-      const respuesta = await api<{ contact?: { id?: string } | null }>(
-        `/contacts/search/duplicate?${params}`,
-        VERSION_API.contactos,
-      );
-      if (respuesta?.contact?.id) return respuesta.contact.id;
-    } catch (error) {
-      if (!(error instanceof ErrorGhl && error.estadoHttp === 404)) throw error;
-    }
+  const params = new URLSearchParams({ locationId: GHL_LOCATION_ID ?? "", email });
+  try {
+    const respuesta = await api<{ contact?: { id?: string } | null }>(
+      `/contacts/search/duplicate?${params}`,
+      VERSION_API.contactos,
+    );
+    return respuesta?.contact?.id ?? null;
+  } catch (error) {
+    if (error instanceof ErrorGhl && error.estadoHttp === 404) return null;
+    throw error;
   }
-  return null;
 }
 
 export interface MensajeGhl {

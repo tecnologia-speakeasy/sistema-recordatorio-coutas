@@ -3,13 +3,14 @@ import { configGeneral, configGhl } from "../config";
 import { consultar, consultarUno } from "../db";
 import { dispararWorkflow, ErrorGhl, type DatosWorkflow } from "../ghl";
 import { normalizarTelefono } from "../telefonos";
-import { esperar, esUrlHttp, formatearFechaLarga, mensajeDeError, primerNombre } from "../utilidades";
+import { esCorreo, esperar, esUrlHttp, formatearFechaLarga, mensajeDeError, primerNombre } from "../utilidades";
 import { registrarEvento } from "./bitacora";
-import { leerAjustes, pagoReportado, ventanaCerrada } from "./interacciones";
+import { leerAjustes, marcarSinContacto, pagoReportado, ventanaCerrada } from "./interacciones";
 import {
   ESTADOS_REENVIABLES,
   ETAPA_SEGUIMIENTO,
   PASARELAS,
+  PREFIJO_SIN_CONTACTO,
   type CuotaFuente,
   type Envio,
   type Etapa,
@@ -26,7 +27,7 @@ export type Alcance = { fecha: string; ids?: never } | { ids: string[]; fecha?: 
 
 /**
  * Despacha los envíos pendientes del alcance hasta agotarlos o agotar el tiempo.
- * Nunca toma dos envíos del mismo teléfono a la vez ni dentro de la ventana
+ * Nunca toma dos envíos del mismo contacto a la vez ni dentro de la ventana
  * ESPERA_MISMO_CONTACTO_SEG (ver reclamarLote).
  */
 export async function despacharPendientes(alcance: Alcance, limiteMs: number): Promise<ResultadoDespacho> {
@@ -40,7 +41,7 @@ export async function despacharPendientes(alcance: Alcance, limiteMs: number): P
 
     if (!lote.length) {
       if (!(await quedanPendientes(alcance))) break;
-      // Lo que queda está en espera por teléfono repetido: aguardar y reintentar.
+      // Lo que queda está en espera por contacto repetido: aguardar y reintentar.
       const pausa = Math.min(10_000, fin - Date.now());
       if (pausa <= 0) break;
       await esperar(pausa);
@@ -111,13 +112,15 @@ async function cargarEtapas(): Promise<Map<string, Etapa>> {
 }
 
 /**
- * Mismo teléfono aunque cartera lo tenga en formatos distintos ("1 (305) 555-1001",
+ * Mismo contacto de GHL: el workflow lo busca por correo. Sin correo, el mismo
+ * teléfono aunque cartera lo tenga en formatos distintos ("1 (305) 555-1001",
  * "+1 305 555 1001"): últimos 10 dígitos. Un falso positivo solo retrasa el envío.
  */
-const claveTelefono = (alias: string) => `NULLIF(right(regexp_replace(${alias}.telefono, '\\D', '', 'g'), 10), '')`;
+const claveContacto = (alias: string) =>
+  `COALESCE(NULLIF(lower(btrim(${alias}.email)), ''), NULLIF(right(regexp_replace(${alias}.telefono, '\\D', '', 'g'), 10), ''))`;
 
 /**
- * Toma hasta TAMANO_LOTE pendientes, uno por teléfono, excluyendo teléfonos con
+ * Toma hasta TAMANO_LOTE pendientes, uno por contacto, excluyendo contactos con
  * un envío en curso o enviado hace menos de `esperaSeg`. El re-chequeo de
  * `estado = 'pendiente'` en el UPDATE evita que dos ejecuciones concurrentes
  * tomen el mismo envío.
@@ -125,16 +128,16 @@ const claveTelefono = (alias: string) => `NULLIF(right(regexp_replace(${alias}.t
 async function reclamarLote(alcance: Alcance, esperaSeg: number): Promise<Envio[]> {
   return consultar<Envio>(
     `WITH candidatos AS (
-       SELECT DISTINCT ON (COALESCE(${claveTelefono("e")}, e.id::text)) e.id
+       SELECT DISTINCT ON (COALESCE(${claveContacto("e")}, e.id::text)) e.id
        FROM recordatorios.envios e
        WHERE e.estado = 'pendiente'
          AND ${FILTRO_ALCANCE}
          AND NOT EXISTS (
            SELECT 1 FROM recordatorios.envios o
            WHERE (o.estado = 'procesando' OR o.enviado_en > now() - make_interval(secs => $4))
-             AND o.id <> e.id AND ${claveTelefono("o")} = ${claveTelefono("e")}
+             AND o.id <> e.id AND ${claveContacto("o")} = ${claveContacto("e")}
          )
-       ORDER BY COALESCE(${claveTelefono("e")}, e.id::text), e.id
+       ORDER BY COALESCE(${claveContacto("e")}, e.id::text), e.id
        LIMIT $3
      )
      UPDATE recordatorios.envios e
@@ -179,10 +182,13 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
       return await omitir(envio, "Se cerró la ventana de 24 h de WhatsApp: el seguimiento (mensaje normal) ya no se puede enviar");
     }
 
+    // Si cambió el correo, el contacto/conversación de GHL se vuelven a buscar al verificar.
     await consultar(
       `UPDATE recordatorios.envios
        SET nombre = $2, telefono = $3, email = $4, pais = $5, producto = $6, metodo_pago = $7,
-           pasarela = $8, concepto = $9, link_pago = $10, total_cuotas = $11, referido = $12, descuento = $13
+           pasarela = $8, concepto = $9, link_pago = $10, total_cuotas = $11, referido = $12, descuento = $13,
+           ghl_contact_id = CASE WHEN email IS NOT DISTINCT FROM $4 THEN ghl_contact_id END,
+           ghl_conversation_id = CASE WHEN email IS NOT DISTINCT FROM $4 THEN ghl_conversation_id END
        WHERE id = $1`,
       [
         envio.id, fuente.nombre, fuente.telefono, fuente.email, fuente.pais, fuente.producto,
@@ -196,8 +202,17 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
       return await fallar(envio, `La etapa ${envio.etapa} no tiene configurado el webhook del workflow de GHL`);
     }
 
+    // El workflow busca al estudiante en GHL por correo y el WhatsApp sale al teléfono
+    // de ese contacto en GHL, así que el teléfono de cartera es opcional.
+    const email = fuente.email?.trim() ?? "";
+    if (!esCorreo(email)) {
+      const mensaje =
+        `${PREFIJO_SIN_CONTACTO}: la compra no tiene un correo válido en cartera ("${email}") y GHL busca ` +
+        "al estudiante por correo. Corrígelo en cartera y reenvía.";
+      await marcarSinContacto(envio.id, mensaje, { origen: "cartera", email });
+      return "fallido";
+    }
     const telefono = normalizarTelefono(fuente.telefono, fuente.pais, TELEFONO_CODIGO_PAIS);
-    if (!telefono) return await fallar(envio, `Teléfono inválido o vacío: "${fuente.telefono ?? ""}"`);
 
     // El seguimiento no lleva link de pago; los recordatorios sí.
     if (etapa.offset_dias !== null && !esUrlHttp(fuente.link_pago)) {
@@ -215,8 +230,8 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
       plantilla: etapa.plantilla ?? "",
       primer_nombre: primerNombre(fuente.nombre) || "estudiante",
       nombre: fuente.nombre ?? "",
-      telefono,
-      email: fuente.email ?? "",
+      telefono: telefono ?? "",
+      email,
       link_pago: `${APP_URL}/p/${envio.token}`,
       link_soporte: ajustes.link_soporte ?? "",
       token: envio.token,
@@ -238,7 +253,7 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
 
     const respuestaGhl = await dispararWorkflow(etapa.ghl_webhook_url, datos);
     await marcarEnviado(envio.id, telefono, false, null);
-    await registrarEvento(envio.id, "enviado", { telefono, intento: envio.intentos, respuestaGhl });
+    await registrarEvento(envio.id, "enviado", { email, telefono, intento: envio.intentos, respuestaGhl });
     return "enviado";
   } catch (error) {
     const detalle = error instanceof ErrorGhl ? { estadoHttp: error.estadoHttp, cuerpo: error.cuerpo } : undefined;
@@ -246,16 +261,16 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
   }
 }
 
-/** Si cambió el teléfono, el contacto/conversación de GHL se vuelven a buscar al verificar. */
-async function marcarEnviado(id: string, telefono: string, simulado: boolean, nota: string | null) {
+/**
+ * Solo si sigue 'procesando': el workflow pudo avisar "contacto_no_encontrado"
+ * (fallido) antes de que termine esta llamada, y ese aviso manda.
+ */
+async function marcarEnviado(id: string, telefono: string | null, simulado: boolean, nota: string | null) {
   await consultar(
     `UPDATE recordatorios.envios
      SET estado = 'enviado', enviado_en = now(), procesando_desde = NULL, ultimo_error = $4, simulado = $3,
-         ghl_contact_id = CASE WHEN telefono_e164 IS NOT DISTINCT FROM $2 THEN ghl_contact_id END,
-         ghl_conversation_id = CASE WHEN telefono_e164 IS NOT DISTINCT FROM $2 THEN ghl_conversation_id END,
-         telefono_e164 = $2,
-         ghl_message_id = NULL, entregado_en = NULL, leido_en = NULL
-     WHERE id = $1`,
+         telefono_e164 = $2, ghl_message_id = NULL, entregado_en = NULL, leido_en = NULL
+     WHERE id = $1 AND estado = 'procesando'`,
     [id, telefono, simulado, nota],
   );
 }

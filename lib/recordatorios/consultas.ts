@@ -1,6 +1,14 @@
 import "server-only";
 import { consultar, consultarUno } from "../db";
-import { ESTADOS_ENVIO, ETAPA_SEGUIMIENTO, type EstadoEnvio, type Envio, type Etapa, type Pasarela } from "./tipos";
+import {
+  ESTADOS_ENVIO,
+  ETAPA_SEGUIMIENTO,
+  PREFIJO_SIN_CONTACTO,
+  type EstadoEnvio,
+  type Envio,
+  type Etapa,
+  type Pasarela,
+} from "./tipos";
 
 export const TAMANO_PAGINA = 50;
 
@@ -251,6 +259,7 @@ export interface FilaAlerta {
 
 export type ClaveAlerta =
   | "whatsapp_fallido"
+  | "sin_contacto_ghl"
   | "reporto_sin_registro"
   | "pidio_soporte"
   | "sin_abrir_link"
@@ -337,8 +346,10 @@ export async function alertas(desde: string, hasta: string, hoy: string): Promis
   const reciente = (a: Date | null, b: Date | null) => (b?.getTime() ?? 0) - (a?.getTime() ?? 0);
 
   const noPagada = (c: CuotaResumen) => c.pagada === false;
+  const sinContacto = (f: FilaAlerta) => f.detalle?.startsWith(PREFIJO_SIN_CONTACTO) ?? false;
   return [
-    { clave: "whatsapp_fallido", filas: fallidos },
+    { clave: "whatsapp_fallido", filas: fallidos.filter((f) => !sinContacto(f)) },
+    { clave: "sin_contacto_ghl", filas: fallidos.filter(sinContacto) },
     {
       clave: "reporto_sin_registro",
       filas: cuotas
