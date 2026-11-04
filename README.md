@@ -155,17 +155,20 @@ Con cualquiera de los dos, el paso **Esperar respuesta** debe vencer antes del s
 
 #### d) Workflows de recordatorio (D-3, D-1, D0, D+1)
 
-1. **Disparador *Inbound Webhook***. Copia su URL en el panel **Etapas y workflows de GHL**. Para que GHL conozca los campos, mándale un ejemplo y elige esa solicitud en *Mapping reference*:
-   ```bash
-   curl -X POST "<URL del webhook>" -H "Content-Type: application/json" -d '{"primer_nombre":"Prueba","nombre":"Prueba Speak Easy","telefono":"+57TU_NUMERO","email":"tu@correo.com","link_pago":"https://APP_URL/p/00000000000000000000000000000000","token":"00000000000000000000000000000000","concepto":"Cuota 2 de 4","cuota":"2","total_cuotas":"4","fecha_limite":"20 de noviembre","etapa":"D-3","plantilla":"utl_cuota_vencimiento_3dias","metodo_pago":"HOTMART","pasarela":"hotmart","producto":"APRENDE INGLÉS CON SPEAK EASY G2","envio_id":"0"}'
+1. **Disparador *Inbound Webhook***. Copia su URL en el panel **Etapas y workflows de GHL**. Para que GHL conozca los campos, mándale el ejemplo de [integraciones/ghl-ejemplo-webhook.json](integraciones/ghl-ejemplo-webhook.json) y elige esa solicitud en *Mapping reference*. Con el workflow sin publicar, GHL solo lee el ejemplo y no envía nada:
+   ```powershell
+   Invoke-RestMethod -Method Post -Uri "URL_DEL_WEBHOOK" -ContentType "application/json; charset=utf-8" -InFile "integraciones\ghl-ejemplo-webhook.json"
    ```
-2. **Buscar el contacto** por `{{inboundWebhookRequest.telefono}}` (y si no aparece, por `email`). GHL exige un contacto para enviar WhatsApp. Si no existe, créalo solo con teléfono, email y nombre.
+2. **Buscar el contacto** (*Find Contact*) por `{{inboundWebhookRequest.telefono}}` (y si no aparece, por `email`). GHL exige un contacto para enviar WhatsApp. Si no existe, créalo solo con teléfono, email y nombre.
 3. **WhatsApp** con la plantilla de la etapa y `{{1}}` = `primer_nombre`.
-4. **Esperar respuesta** (máx. 20 h) y ramificar por el botón:
+4. **Esperar respuesta** (máx. 20 h) y ramificar por el botón. Si la acción de la plantilla ya muestra una rama por botón y una de *Timeout*, úsalas. Si no, agrega **Wait → Contact Reply** (20 h) y un **If/Else** sobre el texto de la respuesta ("Realizar pago" / "Soporte").
    - *Realizar pago* → **Webhook** `realizar_pago` (ver (e)) → mensaje **Pago** (ver (a)).
    - *Soporte* → **Webhook** `soporte` → mensaje **Soporte**.
    - Sin respuesta → fin.
-5. **Settings → Allow re-entry: activado** (el mismo estudiante entra cada mes). Publicar.
+5. Los mensajes **Pago** y **Soporte** son *WhatsApp Interactive Message* de tipo **Visit Website Button**. Esa acción espera el clic y luego sale por *Link Opened*, *Not Delivered* o *Timeout*. Pon el *Timeout* en el mínimo (5 minutos) y deja las tres ramas en fin: el clic lo registra el sistema, no GHL.
+6. **Settings → Allow re-entry: activado** (el mismo estudiante entra cada mes). Publicar.
+
+Arma D-3 completo y **duplícalo** para D-1, D0 y D+1. En cada copia cambia la plantilla, y abre el disparador: la copia tiene **otra URL**, que es la que va en esa etapa del panel. Vuelve a mandarle el ejemplo.
 
 #### e) Workflow de seguimiento (SEG) y webhooks de respuesta
 
@@ -174,10 +177,10 @@ Workflow SEG:
 1. Disparador *Inbound Webhook*; su URL va en la etapa SEG del panel.
 2. Buscar el contacto.
 3. *WhatsApp: Customer Service Window Check*. Si la ventana está cerrada → fin.
-4. Mensaje **Seguimiento** (ver (a)).
-5. **Esperar respuesta** (máx. 20 h):
-   - *Pago realizado* → **Webhook** `pago_realizado` → mensaje **Felicitación**.
+4. Mensaje **Seguimiento** (ver (a)): *WhatsApp Interactive Message* de tipo **Quick Reply Buttons**, con los botones **Pago realizado** y **Soporte** y *Timeout* de 20 h. Cada botón sale por su rama:
+   - *Pago realizado* → **Webhook** `pago_realizado` → mensaje **Felicitación** (acción *WhatsApp* con texto normal, sin plantilla: la ventana está abierta).
    - *Soporte* → **Webhook** `soporte` → mensaje **Soporte**.
+   - *Timeout* → fin.
 
 **Webhooks de respuesta.** Son la acción *Webhook* de GHL, en todas las ramas de botón de los 5 workflows:
 
@@ -350,5 +353,6 @@ db/migraciones/
 integraciones/
   n8n-google-sheets.json        workflow de n8n para importar
   encabezados-sheets.tsv        fila de encabezados de cada pestaña
+  ghl-ejemplo-webhook.json      datos de ejemplo para el disparador Inbound Webhook de GHL
 proxy.ts                        Basic Auth del dashboard
 ```

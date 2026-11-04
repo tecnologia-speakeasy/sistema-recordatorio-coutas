@@ -1,0 +1,20 @@
+{
+  "envio_id": "0",
+  "etapa": "D-3",
+  "plantilla": "utl_cuota_vencimiento_3dias",
+  "primer_nombre": "Prueba",
+  "nombre": "Prueba Speak Easy",
+  "telefono": "+573186994641",
+  "email": "yeisonfa123.2003@gmail.com",
+  "link_pago": "https://pay.hotmart.com/M104731124T?off=x4db3vpu&checkoutMode=10",
+  "link_soporte": "https://api.whatsapp.com/send/?phone=573052772407&text&type=phone_number&app_absent=0",
+  "token": "00000000000000000000000000000000",
+  "cuota": "2",
+  "total_cuotas": "4",
+  "concepto": "Cuota 2 de 4",
+  "fecha_limite": "20 de noviembre",
+  "metodo_pago": "HOTMART",
+  "pasarela": "hotmart",
+  "referido": "no",
+  "producto": "APRENDE INGLÉS CON SPEAK EASY G2"
+}
