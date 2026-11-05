@@ -233,13 +233,14 @@ El sistema no se conecta a Google: envía las filas a un **webhook de n8n**, y n
 
 1. **La hoja**: crea una hoja de cálculo con 5 pestañas llamadas exactamente **Cuota 2**, **Cuota 3**, **Cuota 4**, **Cuota 5** y **Cuota 6**. En la celda A1 de cada una, pega los encabezados: abre [integraciones/encabezados-sheets.tsv](integraciones/encabezados-sheets.tsv) en VS Code, Ctrl+A, Ctrl+C y pega en A1; quedan repartidos en columnas.
    Agrega una sexta pestaña, **Pagos por verificar**, con los encabezados de [integraciones/encabezados-pagos-por-verificar.tsv](integraciones/encabezados-pagos-por-verificar.tsv).
-2. **El workflow**: en n8n, *Workflows → Import from File* → [integraciones/n8n-google-sheets.json](integraciones/n8n-google-sheets.json). Trae 3 nodos: *Webhook → Separar filas → Google Sheets*.
+2. **El workflow**: en n8n, *Workflows → Import from File* → [integraciones/n8n-google-sheets.json](integraciones/n8n-google-sheets.json). Trae 5 nodos: *Webhook → Separar filas → ¿Pagos por verificar?*, que manda cada lote a uno de dos nodos de Google Sheets: **Google Sheets** (pestañas *Cuota N*) o **Google Sheets · Pagos por verificar**. Son dos nodos porque n8n guarda las columnas de la pestaña con la que se configuró el nodo y falla (*Column names were updated after the node's setup*) si otra pestaña tiene encabezados distintos.
 3. **Nodo Google Sheets**, en este orden (al cambiar el documento, n8n vacía los campos de abajo):
    - *Credential*: **Sign in with Google** con la cuenta dueña de la hoja.
    - *Document*: elige la hoja en la lista o pega su URL.
    - *Sheet*: cambia *From list* por **By Name**, pasa a **Expression** y pega `{{ $('Webhook').first().json.body.pestana }}`. Así cada lote va a su pestaña (Cuota 2, Cuota 3…).
    - *Mapping Column Mode*: **Map Automatically**. *Column to match on*: **ID**. Si esa lista sale vacía es porque n8n aún no sabe qué pestaña es: envía primero la fila de prueba del paso 4.
    - *Options → Add option → Cell Format*: **Let n8n format** (guarda los teléfonos con su `+` y las fechas tal cual).
+   - Repite credencial y documento en **Google Sheets · Pagos por verificar**. Ahí *Sheet* es fijo: **From list → Pagos por verificar**. Luego *Column to match on*: **ID** (así toma las columnas de esa pestaña).
 4. **Fila de prueba**: en el nodo Webhook, **Listen for test event**, y desde PowerShell envía una fila a la *Test URL*:
    ```powershell
    $prueba = '{"pestana":"Cuota 2","filas":[{"ID":"prueba","Nombre":"Fila de prueba"}]}'

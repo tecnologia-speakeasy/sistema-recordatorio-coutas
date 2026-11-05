@@ -34,6 +34,72 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "6f0c2b9e-3c1d-4a57-9b8e-2f4d7a1c5e90",
+              "leftValue": "={{ $('Webhook').first().json.body.pestana }}",
+              "rightValue": "Pagos por verificar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0b7e4d21-8a3f-4c6e-9d15-7e2a6b3f8c41",
+      "name": "¿Pagos por verificar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Pagos por verificar",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "ID"
+          ],
+          "schema": []
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "5d9a1e73-2b4c-4f8d-a6e0-3c7b9f2d1a58",
+      "name": "Google Sheets · Pagos por verificar",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        720,
+        -100
+      ]
+    },
+    {
+      "parameters": {
         "operation": "appendOrUpdate",
         "documentId": {
           "__rl": true,
@@ -62,8 +128,8 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        480,
-        0
+        720,
+        100
       ]
     }
   ],
@@ -81,6 +147,24 @@
     },
     "Separar filas": {
       "main": [
+        [
+          {
+            "node": "¿Pagos por verificar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Pagos por verificar?": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets · Pagos por verificar",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Google Sheets",
