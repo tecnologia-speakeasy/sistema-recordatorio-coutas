@@ -5,8 +5,9 @@ import { consultar } from "../db";
  * Crea los envíos que corresponden a `fecha` para cada etapa activa por fecha:
  * cuota no pagada cuyo vencimiento = fecha - offset de la etapa.
  * Idempotente gracias a UNIQUE (cuota_id, fecha_vencimiento, etapa).
+ * `producto` (pruebas con fecha simulada) limita la planificación a ese producto.
  */
-export async function planificar(fecha: string): Promise<number> {
+export async function planificar(fecha: string, producto?: string): Promise<number> {
   const filas = await consultar<{ id: string }>(
     `INSERT INTO recordatorios.envios
        (cuota_id, compra_id, producto_id, cuota_numero, total_cuotas, etapa, fecha_vencimiento, fecha_programada,
@@ -18,9 +19,10 @@ export async function planificar(fecha: string): Promise<number> {
      JOIN recordatorios.v_cuotas_fuente f
        ON f.fecha_vencimiento = $1::date - e.offset_dias
      WHERE e.activa AND e.offset_dias IS NOT NULL AND NOT f.pagada
+       AND ($2::uuid IS NULL OR f.producto_id = $2::uuid)
      ON CONFLICT (cuota_id, fecha_vencimiento, etapa) DO NOTHING
      RETURNING id`,
-    [fecha],
+    [fecha, producto ?? null],
   );
   return filas.length;
 }
@@ -32,8 +34,9 @@ export async function planificar(fecha: string): Promise<number> {
  *    automático duplicaría el mensaje. Se revisan y reenvían desde el dashboard.
  *  - Recordatorios pendientes de días anteriores se omiten: un "faltan 3 días" no
  *    se envía tarde. Un seguimiento se omite si lleva más de un día vencido.
+ *    Con `producto` (fecha simulada) solo se omiten los de ese producto.
  */
-export async function prepararDia(fecha: string): Promise<number> {
+export async function prepararDia(fecha: string, producto?: string): Promise<number> {
   await consultar(
     `WITH colgados AS (
        UPDATE recordatorios.envios
@@ -52,8 +55,9 @@ export async function prepararDia(fecha: string): Promise<number> {
      WHERE estado = 'pendiente'
        AND CASE WHEN programado_para IS NULL THEN fecha_programada < $1::date
                 ELSE programado_para < now() - interval '1 day' END
+       AND ($2::uuid IS NULL OR producto_id = $2::uuid)
      RETURNING id`,
-    [fecha],
+    [fecha, producto ?? null],
   );
   return expirados.length;
 }

@@ -12,6 +12,8 @@ export interface OpcionesCiclo {
   origen: "cron" | "manual";
   /** Solo para pruebas: simula que hoy es esta fecha (YYYY-MM-DD). */
   fecha?: string;
+  /** Solo para pruebas: limita la planificación y el despacho a este producto (id de cartera). */
+  producto?: string;
   /** Ignora la ventana horaria de envío (ejecución manual). */
   forzarVentana?: boolean;
 }
@@ -31,7 +33,7 @@ export async function ejecutarCiclo(opciones: OpcionesCiclo): Promise<ResumenCic
   return conBloqueo("ciclo", general.PRESUPUESTO_EJECUCION_SEG + 120, () => cicloSinBloqueo(opciones));
 }
 
-async function cicloSinBloqueo({ origen, fecha, forzarVentana }: OpcionesCiclo): Promise<ResumenCiclo> {
+async function cicloSinBloqueo({ origen, fecha, producto, forzarVentana }: OpcionesCiclo): Promise<ResumenCiclo> {
   const general = configGeneral();
   const inicio = Date.now();
   const fechaRef = fecha ?? hoyEnZona(general.APP_TIMEZONE);
@@ -65,15 +67,15 @@ async function cicloSinBloqueo({ origen, fecha, forzarVentana }: OpcionesCiclo):
   };
 
   await paso("preparación", async () => {
-    resumen.expirados = await prepararDia(fechaRef);
+    resumen.expirados = await prepararDia(fechaRef, producto);
   });
   await paso("planificación", async () => {
-    resumen.planificados = await planificar(fechaRef);
+    resumen.planificados = await planificar(fechaRef, producto);
   });
   if (resumen.despachoEnVentana) {
     await paso("despacho", async () => {
       const limiteMs = general.PRESUPUESTO_EJECUCION_SEG * 1000 - (Date.now() - inicio);
-      Object.assign(resumen, await despacharPendientes({ fecha: fechaRef }, limiteMs));
+      Object.assign(resumen, await despacharPendientes({ fecha: fechaRef, producto }, limiteMs));
     });
   }
   await paso("verificación", async () => {

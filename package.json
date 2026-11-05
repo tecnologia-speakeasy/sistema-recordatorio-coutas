@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
-    "db:migrar": "node --env-file=.env.local scripts/migrar.mjs"
+    "db:migrar": "node --env-file=.env.local scripts/migrar.mjs",
+    "db:sql": "node --env-file=.env.local scripts/ejecutar-sql.mjs"
   },
   "dependencies": {
     "next": "16.4.3",

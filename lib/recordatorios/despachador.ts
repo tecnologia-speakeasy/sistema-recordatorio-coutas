@@ -22,8 +22,13 @@ const CONCURRENCIA = 4; // una llamada a GHL por envío
 
 type Desenlace = "enviado" | "fallido" | "omitido";
 
-/** Qué pendientes despachar: los programados para una fecha (cron) o envíos puntuales (reenvío manual). */
-export type Alcance = { fecha: string; ids?: never } | { ids: string[]; fecha?: never };
+/**
+ * Qué pendientes despachar: los programados para una fecha (cron; en pruebas, de
+ * un solo producto) o envíos puntuales (reenvío manual).
+ */
+export type Alcance =
+  | { fecha: string; producto?: string; ids?: never }
+  | { ids: string[]; fecha?: never; producto?: never };
 
 /**
  * Despacha los envíos pendientes del alcance hasta agotarlos o agotar el tiempo.
@@ -93,12 +98,14 @@ export async function marcarParaReenvio(ids: string[]): Promise<string[]> {
 
 /**
  * $1 = fecha (cron) o $2 = ids (reenvío); exactamente uno de los dos viene informado.
+ * $3 = producto (opcional, pruebas con fecha simulada).
  * En el cron, los recordatorios salen en su fecha y los seguimientos cuando llega
  * su hora (si quedó fuera de la ventana, en la siguiente ejecución dentro de ella).
  */
 const FILTRO_ALCANCE = `(CASE WHEN $2::bigint[] IS NOT NULL THEN e.id = ANY($2::bigint[])
                               WHEN e.programado_para IS NULL THEN e.fecha_programada = $1::date
-                              ELSE e.programado_para <= now() AND e.programado_para > now() - interval '1 day' END)`;
+                              ELSE e.programado_para <= now() AND e.programado_para > now() - interval '1 day' END)
+                        AND ($3::uuid IS NULL OR e.producto_id = $3::uuid)`;
 
 /** Lo que todos los envíos de una ejecución comparten. */
 interface Contexto {
@@ -134,18 +141,18 @@ async function reclamarLote(alcance: Alcance, esperaSeg: number): Promise<Envio[
          AND ${FILTRO_ALCANCE}
          AND NOT EXISTS (
            SELECT 1 FROM recordatorios.envios o
-           WHERE (o.estado = 'procesando' OR o.enviado_en > now() - make_interval(secs => $4))
+           WHERE (o.estado = 'procesando' OR o.enviado_en > now() - make_interval(secs => $5))
              AND o.id <> e.id AND ${claveContacto("o")} = ${claveContacto("e")}
          )
        ORDER BY COALESCE(${claveContacto("e")}, e.id::text), e.id
-       LIMIT $3
+       LIMIT $4
      )
      UPDATE recordatorios.envios e
      SET estado = 'procesando', procesando_desde = now(), intentos = e.intentos + 1
      FROM candidatos c
      WHERE e.id = c.id AND e.estado = 'pendiente'
      RETURNING e.*`,
-    [alcance.fecha ?? null, alcance.ids ?? null, TAMANO_LOTE, esperaSeg],
+    [alcance.fecha ?? null, alcance.ids ?? null, alcance.producto ?? null, TAMANO_LOTE, esperaSeg],
   );
 }
 
@@ -155,7 +162,7 @@ async function quedanPendientes(alcance: Alcance): Promise<boolean> {
        SELECT 1 FROM recordatorios.envios e
        WHERE e.estado = 'pendiente' AND ${FILTRO_ALCANCE}
      ) AS hay`,
-    [alcance.fecha ?? null, alcance.ids ?? null],
+    [alcance.fecha ?? null, alcance.ids ?? null, alcance.producto ?? null],
   );
   return fila?.hay ?? false;
 }

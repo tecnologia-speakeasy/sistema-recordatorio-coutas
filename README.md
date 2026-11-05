@@ -282,8 +282,17 @@ Respuestas: `200` correcto, `500` con detalle en `errores`, `409` si ya hay otra
 
 ### 7. Prueba antes de producción
 
-1. Solo con `GHL_DRY_RUN=true` (con `false` enviaría de verdad a todos los estudiantes de esa fecha), simula el día 17: `curl -H "Authorization: Bearer $CRON_SECRET" "https://APP_URL/api/cron/recordatorios?fecha=2026-11-17"`. En el dashboard revisa a quién se planificó y qué falló: correos faltantes o links faltantes. La bitácora de cada envío muestra los datos que se habrían mandado a GHL.
-2. Con `GHL_DRY_RUN=false`, prueba los workflows con tu número usando el `curl` del punto 4d.
+1. Solo con `GHL_DRY_RUN=true`, simula el día 17: `curl -H "Authorization: Bearer $CRON_SECRET" "https://APP_URL/api/cron/recordatorios?fecha=2026-11-17"`. En el dashboard revisa a quién se planificó y qué falló: correos faltantes o links faltantes. La bitácora de cada envío muestra los datos que se habrían mandado a GHL.
+2. Con `GHL_DRY_RUN=false`, prueba los workflows con tu número usando el ejemplo del punto 4d.
+3. **Prueba real con un producto de prueba** (sin estudiantes): con `GHL_DRY_RUN=false`, `?fecha=` exige `&producto=<id de cartera>`, y planifica y despacha solo ese producto. Así nunca le llega nada a un estudiante real.
+   - [db/pruebas/compras-prueba.sql](db/pruebas/compras-prueba.sql) crea 18 compras de prueba (un caso cada una) en el producto "Prueba Cuotas" y lo registra inactivo. Se corre con `npm run db:sql -- db/pruebas/compras-prueba.sql`.
+   - Se activa el producto en el dashboard y se simula cada etapa, una por día para que los workflows de GHL no se crucen:
+     ```powershell
+     Invoke-RestMethod -Headers @{ Authorization = "Bearer TU_CRON_SECRET" } -Uri "https://APP_URL/api/cron/recordatorios?fecha=2026-11-17&producto=76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265"
+     ```
+     Luego `2026-11-19` (D-1), `2026-11-20` (D0) y `2026-11-21` (D+1). El seguimiento sale solo, 3 h después del clic.
+   - En el dashboard, filtra por la fecha simulada: los envíos quedan con esa fecha programada. [db/pruebas/ver-prueba.sql](db/pruebas/ver-prueba.sql) muestra lo que ve el sistema y en qué quedó cada envío.
+   - Al terminar, y **antes del 17**, corre [db/pruebas/limpiar-prueba.sql](db/pruebas/limpiar-prueba.sql) y borra en Sheets las filas de "Prueba Cuotas".
 
 ---
 
@@ -372,6 +381,10 @@ db/migraciones/
   003_referidos_y_lanzamiento.sql  links del lanzamiento y de referido
   004_respuestas_y_ajustes.sql  botones respondidos y ajustes (link de soporte)
   005_sheets_via_n8n.sql        Sheets vía n8n
+db/pruebas/                     compras de prueba en cartera, estado de la prueba y limpieza
+scripts/
+  migrar.mjs                    npm run db:migrar
+  ejecutar-sql.mjs              npm run db:sql -- archivo.sql
 integraciones/
   n8n-google-sheets.json        workflow de n8n para importar
   encabezados-sheets.tsv        fila de encabezados de cada pestaña
