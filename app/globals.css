@@ -16,6 +16,7 @@
   --color-lienzo: #f6f4f9;
 }
 
+
 @theme inline {
   --font-sans: var(--font-montserrat), Arial, sans-serif;
 }
