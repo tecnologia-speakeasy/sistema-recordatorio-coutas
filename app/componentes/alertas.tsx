@@ -18,7 +18,8 @@ const TEXTOS: Record<ClaveAlerta, { titulo: string; descripcion: string; urgente
   },
   reporto_sin_registro: {
     titulo: "Dijo «Pago realizado» y no figura en cartera",
-    descripcion: "Verifica el pago (transferencia, otro correo…) y regístralo en cartera.",
+    descripcion:
+      "Sigue recibiendo recordatorios hasta que el pago figure en cartera. Verifica el pago (transferencia, otro correo…) y regístralo; también está en la pestaña «Pagos por verificar» de Sheets.",
     urgente: true,
   },
   pidio_soporte: {

@@ -3,7 +3,8 @@
 -- (76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265): envíos y su bitácora, el registro en
 -- recordatorios (con sus links) y las compras, pagos, estados, métodos y
 -- descuentos de cartera. El producto de cartera se conserva.
--- Las filas de Google Sheets se borran a mano (Producto = "Prueba Cuotas").
+-- Las filas de Google Sheets se borran a mano (Producto = "Prueba Cuotas", en las
+-- pestañas "Cuota N" y "Pagos por verificar").
 --
 -- Uso: npm run db:sql -- db/pruebas/limpiar-prueba.sql
 -- =============================================================================
@@ -11,6 +12,11 @@
 BEGIN;
 
 DELETE FROM recordatorios.sheets_filas
+WHERE cuota_id IN (
+  SELECT cuota_id FROM recordatorios.envios
+  WHERE producto_id = '76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265'
+);
+DELETE FROM recordatorios.sheets_verificacion
 WHERE cuota_id IN (
   SELECT cuota_id FROM recordatorios.envios
   WHERE producto_id = '76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265'

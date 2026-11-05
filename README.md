@@ -15,7 +15,7 @@ Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin S
         │                                                                │
         ├─ 1. Higiene     colgados → fallido · pendientes vencidos → omitido
         ├─ 2. Planificar  v_cuotas_fuente × etapas → recordatorios.envios (idempotente)
-        ├─ 3. Despachar   relee cartera (¿pagó? ¿respondió "Pago realizado"?)
+        ├─ 3. Despachar   relee cartera (¿ya figura el pago?)
         │                 → POST al webhook entrante del workflow de la etapa ──► GHL envía la plantilla
         ├─ 4. Verificar   (con GHL_TOKEN) conversación del contacto → entregado / leído / fallido
         └─ 5. Sheets      una fila por estudiante y cuota, en pestañas "Cuota 2", "Cuota 3"...
@@ -23,11 +23,10 @@ Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin S
   Link de pago que recibe el estudiante:  APP_URL/p/<token>
         └─► registra el clic ─► programa el seguimiento (+3 h) ─► 302 a Hotmart/Stripe
 
-  Botones de WhatsApp ("Pago realizado", "Soporte") y
-  correo que no está en GHL ("contacto_no_encontrado"):  workflow ─► POST /api/webhooks/ghl
+  Botones de WhatsApp ("Realizar pago", "Soporte", "Pago realizado"):  workflow ─► POST /api/webhooks/ghl
 ```
 
-**En GHL no se crean campos, ni se crean o modifican contactos.** Cada etapa tiene su workflow con disparador *Inbound Webhook*: el sistema le envía los datos del recordatorio y el workflow los usa como `{{inboundWebhookRequest.campo}}`. El workflow busca al estudiante **por correo**, y el WhatsApp sale al teléfono que tiene ese contacto en GHL; por eso el teléfono de cartera es opcional. Si GHL no tiene el correo, el workflow avisa y el envío queda en la alerta **Sin contacto en GHL**.
+**En GHL no se crean campos, ni se crean o modifican contactos.** Cada etapa tiene su workflow con disparador *Inbound Webhook*: el sistema le envía los datos del recordatorio y el workflow los usa como `{{inboundWebhookRequest.campo}}`. El workflow busca al estudiante **por correo**, y el WhatsApp sale al teléfono que tiene ese contacto en GHL; por eso el teléfono de cartera es opcional. Antes de disparar el workflow, el sistema busca ese correo en GHL (API, con `GHL_TOKEN`). Si no está, no lo dispara y el envío queda en la alerta **Sin contacto en GHL**. El workflow no puede avisarlo, porque en GHL toda acción exige un contacto.
 
 ### ¿Se necesita un cron?
 
@@ -50,7 +49,7 @@ Sí. Lo recomendable es **cada 15 minutos (o cada hora) dentro de la ventana de 
 | **Cuándo** | D-3 (día 17), D-1 (19), D0 (20), D+1 (21). Antes de cada envío se relee cartera: si ya pagó, se omite. |
 | **Qué link** | Método de la compra **Stripe** → link de Stripe; **cualquier otro** (Hotmart, Zelle, Bancolombia, Nequi…) → link de Hotmart. Del plan de su número total de cuotas (2 a 6), y en su versión **referido** si la compra tiene el descuento *REFERIDO*. Son 20 links por producto, que se leen de los **Enlaces de ventas del lanzamiento** (ver 3). |
 | **Seguimiento** | 3 h después del **primer clic** en *Pagar ahora* sale el mensaje "¿pudiste pagar?". Es un mensaje normal, no una plantilla. Sale una sola vez por cuota, dentro de la ventana horaria y con la ventana de 24 h de WhatsApp abierta. |
-| **"Pago realizado"** | Si el estudiante lo responde, queda en el dashboard y en Sheets, y **se detienen los recordatorios restantes de esa cuota**. |
+| **"Pago realizado"** | Si el estudiante lo responde, queda en el dashboard y en la pestaña **Pagos por verificar** de Sheets para que soporte lo confirme. **Los recordatorios siguen hasta que el pago figure en cartera**: solo cartera los detiene. |
 
 La lógica está en la vista `recordatorios.v_cuotas_fuente`, cuya versión vigente está en [db/migraciones/003_referidos_y_lanzamiento.sql](db/migraciones/003_referidos_y_lanzamiento.sql). Para cambiar una regla (por ejemplo, incluir otro estado) se redefine en una migración nueva.
 
@@ -120,7 +119,7 @@ Al tocar un botón, el estudiante le escribe a la cuenta y se abre la **ventana 
 | **Pago** | Rama *Realizar pago* | Excelente!! Para realizar el pago de tu cuota, sólo haz clic en el siguiente botón 👇🏻 | CTA URL **Pagar ahora** → `{{inboundWebhookRequest.link_pago}}` |
 | **Soporte** | Rama *Soporte* (en los 5 workflows) | ¡Claro que sí! Nuestro equipo está listo para ayudarte con tu pago y acompañarte en lo que necesites 📲<br><br>Haz clic en el botón de abajo para hablar directamente con nuestro equipo de soporte 👇🏻 | CTA URL **Hablar con soporte** → `{{inboundWebhookRequest.link_soporte}}` |
 | **Seguimiento** | Workflow SEG (3 h después del clic) | Hola {{inboundWebhookRequest.primer_nombre}}, te saludamos de Speak Easy. Queremos verificar el estado de tu trámite para asegurarnos de que pudiste realizar el pago de tu cuota sin ningún problema. Por favor selecciona una de las opciones a continuación para actualizar tu reporte en el sistema. | Respuesta rápida **Pago realizado** · **Soporte** |
-| **Felicitación** | Rama *Pago realizado* | Felicidades por tu pago🥳!! Gracias por seguir siendo parte del programa Aprende Inglés con Speak Easy 🩷 | — |
+| **Felicitación** | Rama *Pago realizado* | ¡Gracias por avisarnos! 🩷 Vamos a verificar tu pago. Si te llega otro recordatorio antes de que quede registrado, puedes ignorarlo o escribirnos a soporte. | — |
 
 - Los botones admiten hasta 20 caracteres, y cada mensaje lleva un solo botón de URL.
 - El link de soporte se configura en el dashboard (**Etapas y workflows de GHL → Link del chat de soporte**) y llega a todos los workflows. Así se cambia en un solo lugar.
@@ -163,7 +162,7 @@ Con cualquiera de los dos, el paso **Esperar respuesta** debe vencer antes del s
    ```
 2. **Buscar el contacto** (*Find Contact*) por **correo** = `{{inboundWebhookRequest.email}}`. No se crean contactos:
    - *Encontrado* → sigue al paso 3.
-   - *No encontrado* → **Webhook** con `respuesta` = `contacto_no_encontrado` (ver (e)) → fin. El envío queda *fallido* en la alerta **Sin contacto en GHL**: crea el contacto en GHL (o corrige el correo en cartera) y reenvía desde el dashboard.
+   - *No encontrado* → fin, **sin acciones**: GHL las salta porque no hay contacto ("This action requires a Contact"). No hace falta avisar, porque el sistema ya buscó el correo antes de disparar el workflow. Si no estaba, el envío quedó *fallido* en la alerta **Sin contacto en GHL**: crea el contacto en GHL (o corrige el correo en cartera) y reenvía desde el dashboard.
 3. **WhatsApp** con la plantilla de la etapa y `{{1}}` = `primer_nombre`.
 4. **Esperar respuesta** (máx. 20 h) y ramificar por el botón. Si la acción de la plantilla ya muestra una rama por botón y una de *Timeout*, úsalas. Si no, agrega **Wait → Contact Reply** (20 h) y un **If/Else** sobre el texto de la respuesta ("Realizar pago" / "Soporte").
    - *Realizar pago* → **Webhook** `realizar_pago` (ver (e)) → mensaje **Pago** (ver (a)).
@@ -179,14 +178,14 @@ Arma D-3 completo y **duplícalo** para D-1, D0 y D+1. En cada copia cambia la p
 Workflow SEG:
 
 1. Disparador *Inbound Webhook*; su URL va en la etapa SEG del panel.
-2. Buscar el contacto por correo, igual que en (d): si no aparece, **Webhook** `contacto_no_encontrado` → fin.
+2. Buscar el contacto por correo, igual que en (d): si no aparece → fin, sin acciones.
 3. *WhatsApp: Customer Service Window Check*. Si la ventana está cerrada → fin.
 4. Mensaje **Seguimiento** (ver (a)): *WhatsApp Interactive Message* de tipo **Quick Reply Buttons**, con los botones **Pago realizado** y **Soporte** y *Timeout* de 20 h. Cada botón sale por su rama:
    - *Pago realizado* → **Webhook** `pago_realizado` → mensaje **Felicitación** (acción *WhatsApp* con texto normal, sin plantilla: la ventana está abierta).
    - *Soporte* → **Webhook** `soporte` → mensaje **Soporte**.
    - *Timeout* → fin.
 
-**Webhooks de respuesta.** Son la acción *Webhook* de GHL, en todas las ramas de botón de los 5 workflows y en la rama *No encontrado* de *Find Contact*:
+**Webhooks de respuesta.** Son la acción *Webhook* de GHL, en todas las ramas de botón de los 5 workflows:
 
 - URL: `POST https://APP_URL/api/webhooks/ghl?secret=GHL_WEBHOOK_SECRET`
 - Datos personalizados: `token` = `{{inboundWebhookRequest.token}}` y `respuesta` =
@@ -196,9 +195,8 @@ Workflow SEG:
   | Botón *Realizar pago* | `realizar_pago` |
   | Botón *Soporte* | `soporte` |
   | Botón *Pago realizado* | `pago_realizado` |
-  | *Find Contact* → no encontrado | `contacto_no_encontrado` |
 
-Con ellos el sistema sabe quién tocó cada botón y cuándo se abrió la ventana de 24 h, y arma el panel **Requieren atención**. "Pago realizado" además detiene los recordatorios restantes de esa cuota.
+Con ellos el sistema sabe quién tocó cada botón y cuándo se abrió la ventana de 24 h, y arma el panel **Requieren atención**. "Pago realizado" no detiene los recordatorios (solo el pago en cartera): pasa a la pestaña **Pagos por verificar** de Sheets.
 
 Si el estudiante pagó por Hotmart o Stripe con el mismo correo, el webhook de cartera del inventario ya registró el pago y el seguimiento **no sale**: antes de enviarlo se relee cartera. La pregunta "¿pudiste pagar?" llega solo a quien hizo clic y aún no aparece como pagado.
 
@@ -234,6 +232,7 @@ Aunque sea de solo lectura, el token da acceso a contactos y conversaciones: tr�
 El sistema no se conecta a Google: envía las filas a un **webhook de n8n**, y n8n las escribe en la hoja con tu cuenta de Google.
 
 1. **La hoja**: crea una hoja de cálculo con 5 pestañas llamadas exactamente **Cuota 2**, **Cuota 3**, **Cuota 4**, **Cuota 5** y **Cuota 6**. En la celda A1 de cada una, pega los encabezados: abre [integraciones/encabezados-sheets.tsv](integraciones/encabezados-sheets.tsv) en VS Code, Ctrl+A, Ctrl+C y pega en A1; quedan repartidos en columnas.
+   Agrega una sexta pestaña, **Pagos por verificar**, con los encabezados de [integraciones/encabezados-pagos-por-verificar.tsv](integraciones/encabezados-pagos-por-verificar.tsv).
 2. **El workflow**: en n8n, *Workflows → Import from File* → [integraciones/n8n-google-sheets.json](integraciones/n8n-google-sheets.json). Trae 3 nodos: *Webhook → Separar filas → Google Sheets*.
 3. **Nodo Google Sheets**, en este orden (al cambiar el documento, n8n vacía los campos de abajo):
    - *Credential*: **Sign in with Google** con la cuenta dueña de la hoja.
@@ -251,6 +250,16 @@ El sistema no se conecta a Google: envía las filas a un **webhook de n8n**, y n
 6. En el dashboard, **Sincronizar Sheets**.
 
 Cada fila es un estudiante y una cuota: producto, fecha límite, correo, teléfono, método, descuento, el estado de cada mensaje, si tocó "Realizar pago", los clics, si pidió soporte, la última respuesta y si **reportó el pago**. Cuando algo cambia, n8n actualiza la fila por su **ID**, sin duplicarla. Si n8n o Google fallan, esas filas se reintentan en la siguiente ejecución.
+
+**Pagos por verificar** es la lista de soporte: una fila por cuota en la que el estudiante respondió *Pago realizado*, con nombre, correo, teléfono, producto, cuota, método, fecha del reporte y **Estado**:
+
+| Estado | Significa |
+|---|---|
+| **Por verificar** | Dijo que pagó y cartera no lo muestra: escribirle o revisar el pago. Mientras tanto sigue recibiendo recordatorios. |
+| **Confirmado en cartera** | El pago ya figura; *Pago en cartera* trae la fecha del último pago. |
+| **Compra no activa en cartera** | La compra se canceló, cambió de plan o el producto se desactivó. |
+
+El estado cambia solo, en la siguiente ejecución después de que el pago aparezca en cartera. Las columnas **Atendido por** y **Notas** son de soporte: el sistema no las escribe. Para resaltar los pendientes: selecciona la columna A → *Formato → Formato condicional* → *El texto es exactamente* `Por verificar` → fondo rojo.
 
 - La URL del webhook lleva un código aleatorio: trátala como una contraseña, porque con ella cualquiera podría escribir en la hoja.
 - No cambies los encabezados ni borres la columna **ID**. Sí puedes ordenar, filtrar y agregar columnas a la derecha.
@@ -292,7 +301,7 @@ Respuestas: `200` correcto, `500` con detalle en `errores`, `409` si ya hay otra
      ```
      Luego `2026-11-19` (D-1), `2026-11-20` (D0) y `2026-11-21` (D+1). El seguimiento sale solo, 3 h después del clic.
    - En el dashboard, filtra por la fecha simulada: los envíos quedan con esa fecha programada. [db/pruebas/ver-prueba.sql](db/pruebas/ver-prueba.sql) muestra lo que ve el sistema y en qué quedó cada envío.
-   - Al terminar, y **antes del 17**, corre [db/pruebas/limpiar-prueba.sql](db/pruebas/limpiar-prueba.sql) y borra en Sheets las filas de "Prueba Cuotas".
+   - Al terminar, y **antes del 17**, corre [db/pruebas/limpiar-prueba.sql](db/pruebas/limpiar-prueba.sql) y borra en Sheets las filas de "Prueba Cuotas" (pestañas de cuota y *Pagos por verificar*).
 
 ---
 
@@ -304,7 +313,7 @@ Protegido con HTTP Basic (`DASHBOARD_USUARIO` / `DASHBOARD_CLAVE`). Las server a
 - **Requieren atención**: tarjetas con la lista de estudiantes (nombre, teléfono, correo, cuota) que piden una acción del equipo:
   - **WhatsApp que fallaron**: falta el link, error de GHL o de WhatsApp (por ejemplo, el contacto no tiene un número con WhatsApp).
   - **Sin contacto en GHL**: GHL no encontró el correo del estudiante (o cartera no tiene correo), así que el WhatsApp no salió. Se crea el contacto en GHL o se corrige el correo, y se reenvía.
-  - **Dijo «Pago realizado» y no figura en cartera**: verificar y registrar el pago.
+  - **Dijo «Pago realizado» y no figura en cartera**: verificar y registrar el pago. Sigue recibiendo recordatorios mientras tanto; la misma lista está en la pestaña *Pagos por verificar* de Sheets.
   - **Pidió soporte**.
   - **Tocó «Realizar pago» y no abrió el link**.
   - **Abrió el link y no ha pagado**: más de 3 h después del clic.
@@ -372,7 +381,7 @@ lib/
     despachador.ts              reclamo concurrente, revalidación y envío
     interacciones.ts            clics, seguimiento y respuestas
     verificador.ts              estado real de WhatsApp en GHL
-    sincronizar-sheets.ts       pestañas por cuota en Google Sheets
+    sincronizar-sheets.ts       pestañas por cuota y "Pagos por verificar" en Google Sheets
     ciclo.ts                    orquestación de una ejecución
     consultas.ts                lecturas del dashboard
 db/migraciones/
@@ -381,13 +390,15 @@ db/migraciones/
   003_referidos_y_lanzamiento.sql  links del lanzamiento y de referido
   004_respuestas_y_ajustes.sql  botones respondidos y ajustes (link de soporte)
   005_sheets_via_n8n.sql        Sheets vía n8n
+  006_pagos_por_verificar.sql   pestaña "Pagos por verificar"
 db/pruebas/                     compras de prueba en cartera, estado de la prueba y limpieza
 scripts/
   migrar.mjs                    npm run db:migrar
   ejecutar-sql.mjs              npm run db:sql -- archivo.sql
 integraciones/
   n8n-google-sheets.json        workflow de n8n para importar
-  encabezados-sheets.tsv        fila de encabezados de cada pestaña
+  encabezados-sheets.tsv        fila de encabezados de las pestañas "Cuota N"
+  encabezados-pagos-por-verificar.tsv  fila de encabezados de "Pagos por verificar"
   ghl-ejemplo-webhook.json      datos de ejemplo para el disparador Inbound Webhook de GHL
 proxy.ts                        Basic Auth del dashboard
 ```

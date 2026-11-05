@@ -1,11 +1,11 @@
 import "server-only";
-import { configGeneral, configGhl } from "../config";
+import { apiGhlConfigurada, configGeneral, configGhl } from "../config";
 import { consultar, consultarUno } from "../db";
-import { dispararWorkflow, ErrorGhl, type DatosWorkflow } from "../ghl";
+import { buscarContacto, dispararWorkflow, ErrorGhl, type DatosWorkflow } from "../ghl";
 import { normalizarTelefono } from "../telefonos";
 import { esCorreo, esperar, esUrlHttp, formatearFechaLarga, mensajeDeError, primerNombre } from "../utilidades";
 import { registrarEvento } from "./bitacora";
-import { leerAjustes, marcarSinContacto, pagoReportado, ventanaCerrada } from "./interacciones";
+import { errorSinContacto, leerAjustes, marcarSinContacto, ventanaCerrada } from "./interacciones";
 import {
   ESTADOS_REENVIABLES,
   ETAPA_SEGUIMIENTO,
@@ -180,10 +180,9 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
     if (!fuente) {
       return await omitir(envio, "La cuota ya no aparece en cartera (compra no activa, producto inactivo o plan cambiado)");
     }
+    // Solo cartera detiene los recordatorios. Si el estudiante dijo "Pago realizado"
+    // y el pago no figura, se sigue enviando; soporte lo ve en "Pagos por verificar".
     if (fuente.pagada) return await omitir(envio, "La cuota ya está pagada en cartera");
-    if (await pagoReportado(envio.cuota_id, envio.fecha_vencimiento)) {
-      return await omitir(envio, "El estudiante respondió por WhatsApp que ya pagó esta cuota");
-    }
     // El seguimiento es un mensaje normal: fuera de la ventana de 24 h WhatsApp lo rechaza.
     if (envio.etapa === ETAPA_SEGUIMIENTO && (await ventanaCerrada(envio.cuota_id, envio.fecha_vencimiento))) {
       return await omitir(envio, "Se cerró la ventana de 24 h de WhatsApp: el seguimiento (mensaje normal) ya no se puede enviar");
@@ -258,9 +257,17 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
       return "enviado";
     }
 
+    // El workflow no puede avisar que no encontró el contacto (en GHL toda acción
+    // exige uno), así que se comprueba aquí y, si no existe, no se dispara.
+    const contacto = await contactoEnGhl(email);
+    if (contacto === null) {
+      await marcarSinContacto(envio.id, errorSinContacto(email), { origen: "envio", email });
+      return "fallido";
+    }
+
     const respuestaGhl = await dispararWorkflow(etapa.ghl_webhook_url, datos);
-    await marcarEnviado(envio.id, telefono, false, null);
-    await registrarEvento(envio.id, "enviado", { email, telefono, intento: envio.intentos, respuestaGhl });
+    await marcarEnviado(envio.id, telefono, false, null, contacto);
+    await registrarEvento(envio.id, "enviado", { email, telefono, contacto, intento: envio.intentos, respuestaGhl });
     return "enviado";
   } catch (error) {
     const detalle = error instanceof ErrorGhl ? { estadoHttp: error.estadoHttp, cuerpo: error.cuerpo } : undefined;
@@ -269,16 +276,39 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
 }
 
 /**
- * Solo si sigue 'procesando': el workflow pudo avisar "contacto_no_encontrado"
- * (fallido) antes de que termine esta llamada, y ese aviso manda.
+ * Contacto de GHL con ese correo. null = no existe. undefined = no se pudo saber
+ * (API sin configurar o caída): se envía igual, el workflow lo busca y, si no
+ * está, el verificador lo marca "Sin contacto" más tarde.
  */
-async function marcarEnviado(id: string, telefono: string | null, simulado: boolean, nota: string | null) {
+async function contactoEnGhl(email: string): Promise<string | null | undefined> {
+  if (!apiGhlConfigurada()) return undefined;
+  try {
+    return await buscarContacto(email);
+  } catch (error) {
+    console.error("[despacho] no se pudo buscar el contacto en GHL:", mensajeDeError(error));
+    return undefined;
+  }
+}
+
+/**
+ * Solo si sigue 'procesando': si llegara antes un aviso "contacto_no_encontrado"
+ * del workflow (fallido), ese aviso manda. Guarda el contacto ya encontrado para
+ * que el verificador no lo vuelva a buscar.
+ */
+async function marcarEnviado(
+  id: string,
+  telefono: string | null,
+  simulado: boolean,
+  nota: string | null,
+  contacto?: string,
+) {
   await consultar(
     `UPDATE recordatorios.envios
      SET estado = 'enviado', enviado_en = now(), procesando_desde = NULL, ultimo_error = $4, simulado = $3,
-         telefono_e164 = $2, ghl_message_id = NULL, entregado_en = NULL, leido_en = NULL
+         telefono_e164 = $2, ghl_message_id = NULL, entregado_en = NULL, leido_en = NULL,
+         ghl_contact_id = COALESCE($5, ghl_contact_id)
      WHERE id = $1 AND estado = 'procesando'`,
-    [id, telefono, simulado, nota],
+    [id, telefono, simulado, nota, contacto ?? null],
   );
 }
 

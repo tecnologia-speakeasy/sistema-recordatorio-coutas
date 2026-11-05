@@ -136,7 +136,8 @@ export async function marcarSinContacto(envioId: string, mensaje: string, detall
 
 /**
  * "Find Contact" no encontró el correo del estudiante en GHL, así que el workflow
- * terminó sin enviar el WhatsApp (acción Webhook de la rama "no encontrado").
+ * terminó sin enviar el WhatsApp (aviso opcional: normalmente el despachador ya lo
+ * detecta antes de disparar el workflow, porque GHL no ejecuta acciones sin contacto).
  * Un envío aún 'pendiente' no se toca: el aviso sería de un intento anterior.
  */
 export async function registrarSinContacto(token: string): Promise<string | null> {
@@ -147,17 +148,6 @@ export async function registrarSinContacto(token: string): Promise<string | null
   if (!envio) return null;
   await marcarSinContacto(envio.id, errorSinContacto(envio.email), { origen: "workflow", email: envio.email });
   return envio.id;
-}
-
-/** ¿El estudiante ya dijo "Pago realizado" para esta cuota? */
-export async function pagoReportado(cuotaId: string, fechaVencimiento: string): Promise<boolean> {
-  const filas = await consultar(
-    `SELECT 1 FROM recordatorios.envios
-     WHERE cuota_id = $1 AND fecha_vencimiento = $2::date AND pago_reportado_en IS NOT NULL
-     LIMIT 1`,
-    [cuotaId, fechaVencimiento],
-  );
-  return filas.length > 0;
 }
 
 /**

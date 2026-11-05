@@ -33,6 +33,7 @@ interface CuotaSync {
  * y las respuestas. n8n hace "Append or Update" por la columna ID, así que
  * reenviar una fila la actualiza en su sitio. Solo envía lo que cambió desde la
  * última sincronización; si n8n falla, esas filas se reintentan en la siguiente.
+ * Después actualiza la pestaña "Pagos por verificar" (ver sincronizarVerificacion).
  */
 export async function sincronizarSheets(): Promise<number> {
   if (!configSheets()) return 0;
@@ -71,10 +72,123 @@ export async function sincronizarSheets(): Promise<number> {
         sincronizadas += delaPestana.length;
       }
     }
-    return sincronizadas;
+    return sincronizadas + (await sincronizarVerificacion(APP_TIMEZONE));
   });
 
   return total ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Pestaña "Pagos por verificar"
+// ---------------------------------------------------------------------------
+
+/** Pestaña para soporte: quien dijo "Pago realizado", y si cartera ya lo muestra. */
+export const PESTANA_VERIFICACION = "Pagos por verificar";
+
+interface Verificacion {
+  cuota_id: string;
+  fecha_vencimiento: string;
+  huella: string;
+  estado: string;
+  nombre: string | null;
+  email: string | null;
+  telefono: string | null;
+  producto: string | null;
+  cuota: string;
+  metodo_pago: string | null;
+  reportado: string;
+  pago_cartera: string | null;
+  actualizado: string;
+}
+
+/**
+ * Una fila por cuota en la que el estudiante respondió "Pago realizado". Se
+ * reenvía cuando cambia algo de lo que muestra: sobre todo, cuando el pago
+ * aparece en cartera ("Por verificar" -> "Confirmado en cartera"). Las columnas
+ * "Atendido por" y "Notas" son de soporte: el sistema no las envía.
+ */
+async function sincronizarVerificacion(zona: string): Promise<number> {
+  let sincronizadas = 0;
+  for (let vuelta = 0; vuelta < 20; vuelta++) {
+    const filas = await verificacionesPendientes(zona);
+    if (!filas.length) break;
+
+    await enviarFilas(
+      PESTANA_VERIFICACION,
+      filas.map((v) => ({
+        Estado: v.estado,
+        Nombre: v.nombre,
+        Correo: v.email,
+        Teléfono: v.telefono,
+        Producto: v.producto,
+        Cuota: v.cuota,
+        "Fecha límite": v.fecha_vencimiento,
+        "Método de pago": v.metodo_pago,
+        "Fecha del reporte": v.reportado,
+        "Pago en cartera": v.pago_cartera ?? "",
+        Actualizado: v.actualizado,
+        ID: `${v.cuota_id}|${v.fecha_vencimiento}`,
+      })),
+    );
+    await consultar(
+      `INSERT INTO recordatorios.sheets_verificacion (cuota_id, fecha_vencimiento, huella)
+       SELECT * FROM unnest($1::text[], $2::date[], $3::text[])
+       ON CONFLICT (cuota_id, fecha_vencimiento)
+         DO UPDATE SET huella = EXCLUDED.huella, enviado_en = now()`,
+      [filas.map((v) => v.cuota_id), filas.map((v) => v.fecha_vencimiento), filas.map((v) => v.huella)],
+    );
+    sincronizadas += filas.length;
+  }
+  return sincronizadas;
+}
+
+/** Cuotas reportadas como pagadas cuya fila cambió desde el último envío a la pestaña. */
+function verificacionesPendientes(zona: string) {
+  return consultar<Verificacion>(
+    `WITH r AS (
+       SELECT e.cuota_id, e.fecha_vencimiento,
+              min(e.pago_reportado_en) AS reportado,
+              (array_agg(e.compra_id ORDER BY e.id DESC))[1] AS compra_id,
+              (array_agg(e.cuota_numero ORDER BY e.id DESC))[1] AS cuota_numero,
+              (array_agg(e.total_cuotas ORDER BY e.id DESC))[1] AS total_cuotas,
+              (array_agg(e.nombre ORDER BY e.id DESC))[1] AS nombre,
+              (array_agg(e.email ORDER BY e.id DESC))[1] AS email,
+              (array_agg(COALESCE(e.telefono_e164, e.telefono) ORDER BY e.telefono_e164 IS NULL, e.id DESC))[1] AS telefono,
+              (array_agg(e.producto ORDER BY e.id DESC))[1] AS producto,
+              (array_agg(e.metodo_pago ORDER BY e.id DESC))[1] AS metodo_pago
+       FROM recordatorios.envios e
+       WHERE (e.cuota_id, e.fecha_vencimiento) IN (
+         SELECT cuota_id, fecha_vencimiento FROM recordatorios.envios WHERE pago_reportado_en IS NOT NULL
+       )
+       GROUP BY e.cuota_id, e.fecha_vencimiento
+     ), v AS (
+       SELECT r.*,
+              CASE WHEN f.pagada THEN 'Confirmado en cartera'
+                   WHEN f.pagada IS NULL THEN 'Compra no activa en cartera'
+                   ELSE 'Por verificar' END AS estado,
+              CASE WHEN f.pagada THEN
+                (SELECT to_char(max(x.fecha_pago), 'YYYY-MM-DD') FROM public.cartera_compras_pagos x
+                 WHERE x.compra_id = r.compra_id)
+              END AS pago_cartera
+       FROM r
+       LEFT JOIN recordatorios.v_cuotas_fuente f
+         ON f.compra_id = r.compra_id AND f.cuota_numero = r.cuota_numero AND f.fecha_vencimiento = r.fecha_vencimiento
+     ), h AS (
+       SELECT v.*, md5(concat_ws('|', v.estado, v.pago_cartera, v.reportado, v.nombre, v.email, v.telefono,
+                                 v.producto, v.metodo_pago, v.cuota_numero, v.total_cuotas)) AS huella
+       FROM v
+     )
+     SELECT h.cuota_id, h.fecha_vencimiento::text AS fecha_vencimiento, h.huella, h.estado,
+            h.nombre, h.email, h.telefono, h.producto, h.cuota_numero || ' de ' || h.total_cuotas AS cuota,
+            h.metodo_pago, to_char(h.reportado AT TIME ZONE $1, 'YYYY-MM-DD HH24:MI') AS reportado, h.pago_cartera,
+            to_char(now() AT TIME ZONE $1, 'YYYY-MM-DD HH24:MI') AS actualizado
+     FROM h
+     LEFT JOIN recordatorios.sheets_verificacion s USING (cuota_id, fecha_vencimiento)
+     WHERE s.huella IS DISTINCT FROM h.huella
+     ORDER BY h.reportado
+     LIMIT 100`,
+    [zona],
+  );
 }
 
 /** Cuotas cuyos envíos cambiaron desde la última sincronización, con sus datos agregados. */

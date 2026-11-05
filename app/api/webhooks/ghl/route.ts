@@ -8,11 +8,12 @@ import { AVISO_SIN_CONTACTO, RESPUESTAS, type Respuesta } from "@/lib/recordator
  *   Datos: token     = {{inboundWebhookRequest.token}}
  *          respuesta = pago_realizado | realizar_pago | soporte   (botón tocado; también
  *                      acepta el texto del botón: "Pago realizado")
- *                    | contacto_no_encontrado                    (rama "no encontrado" de
- *                      Find Contact: el WhatsApp no salió)
- * "Pago realizado" queda en el dashboard y en Google Sheets, y detiene los
- * recordatorios restantes de esa cuota. "contacto_no_encontrado" deja el envío
- * fallido en la alerta "Sin contacto en GHL".
+ *                    | contacto_no_encontrado                    (opcional: GHL no deja usar
+ *                      acciones sin contacto, y el despachador ya comprueba el correo en GHL
+ *                      antes de disparar el workflow; se acepta por si un workflow lo envía)
+ * "Pago realizado" queda en el dashboard y en Google Sheets (pestaña "Pagos por
+ * verificar"); los recordatorios siguen hasta que el pago figure en cartera.
+ * "contacto_no_encontrado" deja el envío fallido en la alerta "Sin contacto en GHL".
  */
 export async function POST(request: Request) {
   const secreto = process.env.GHL_WEBHOOK_SECRET;
