@@ -4,6 +4,22 @@
     {
       "path": "/api/cron/recordatorios",
       "schedule": "*/15 0,13-23 * * *"
+    },
+    {
+      "path": "/api/cron/recordatorios?fecha=2026-11-17&producto=76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265",
+      "schedule": "20 20 5 11 *"
+    },
+    {
+      "path": "/api/cron/recordatorios?fecha=2026-11-19&producto=76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265",
+      "schedule": "20 21 5 11 *"
+    },
+    {
+      "path": "/api/cron/recordatorios?fecha=2026-11-20&producto=76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265",
+      "schedule": "20 22 5 11 *"
+    },
+    {
+      "path": "/api/cron/recordatorios?fecha=2026-11-21&producto=76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265",
+      "schedule": "20 23 5 11 *"
     }
   ]
 }
