@@ -9,7 +9,7 @@ Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin S
 ## Cómo funciona
 
 ```
-                 ┌──────────── cron (cada 15 min, 8–19:45 h) ───────────┐
+                 ┌──────────── cron (cada 15 min, 7–19:45 h) ───────────┐
                  ▼                                                       │
   GET /api/cron/recordatorios  (Bearer CRON_SECRET)                      │
         │                                                                │
@@ -270,15 +270,15 @@ El estado cambia solo, en la siguiente ejecución después de que el pago aparez
 
 El endpoint acepta `GET` o `POST` con `Authorization: Bearer $CRON_SECRET`.
 
-- **Vercel**: [vercel.json](vercel.json) lo programa cada 15 minutos de 8:00 a 19:45 (hora de Bogotá). Define `CRON_SECRET` en el proyecto y Vercel enviará el header automáticamente. Si tu plan solo permite ejecuciones diarias, usa un programador externo.
+- **Vercel**: [vercel.json](vercel.json) lo programa cada 15 minutos de 7:00 a 19:45 (hora de Bogotá); el sistema envía entre `HORA_INICIO_ENVIO` (7) y `HORA_FIN_ENVIO` (20). Define `CRON_SECRET` en el proyecto y Vercel enviará el header automáticamente. Si tu plan solo permite ejecuciones diarias, usa un programador externo.
 
-  Para cambiar la frecuencia, reemplaza la línea `"schedule"` de [vercel.json](vercel.json) por una de estas (las horas `0,13-23` están en UTC y equivalen a 8:00–19:00 en Bogotá; no las cambies). `vercel.json` no admite comentarios: si le agregas uno, el deploy falla.
+  Para cambiar la frecuencia, reemplaza la línea `"schedule"` de [vercel.json](vercel.json) por una de estas (las horas `0,12-23` están en UTC y equivalen a 7:00–19:45 en Bogotá; si cambias la hora de inicio, cambia también `HORA_INICIO_ENVIO`). `vercel.json` no admite comentarios: si le agregas uno, el deploy falla.
 
   | Frecuencia | Línea para pegar | Seguimiento sale tras el clic |
   |---|---|---|
-  | Cada 15 minutos (actual) | `"schedule": "*/15 0,13-23 * * *"` | entre 3 h y 3 h 15 min |
-  | Cada 30 minutos | `"schedule": "*/30 0,13-23 * * *"` | entre 3 h y 3 h 30 min |
-  | Cada hora | `"schedule": "0 0,13-23 * * *"` | entre 3 h y 4 h |
+  | Cada 15 minutos (actual) | `"schedule": "*/15 0,12-23 * * *"` | entre 3 h y 3 h 15 min |
+  | Cada 30 minutos | `"schedule": "*/30 0,12-23 * * *"` | entre 3 h y 3 h 30 min |
+  | Cada hora | `"schedule": "0 0,12-23 * * *"` | entre 3 h y 4 h |
 
   El cambio se aplica con el siguiente deploy (commit y push). Se confirma en Vercel → *Settings → Cron Jobs*.
 - **VPS / externo** (crontab, cron-job.org, GitHub Actions):
@@ -296,6 +296,8 @@ Respuestas: `200` correcto, `500` con detalle en `errores`, `409` si ya hay otra
 2. Con `GHL_DRY_RUN=false`, prueba los workflows con tu número usando el ejemplo del punto 4d.
 3. **Prueba real con un producto de prueba** (sin estudiantes): con `GHL_DRY_RUN=false`, `?fecha=` exige `&producto=<id de cartera>`, y planifica y despacha solo ese producto. Así nunca le llega nada a un estudiante real.
    - [db/pruebas/compras-prueba.sql](db/pruebas/compras-prueba.sql) crea 18 compras de prueba (un caso cada una) en el producto "Prueba Cuotas" y lo registra inactivo. Se corre con `npm run db:sql -- db/pruebas/compras-prueba.sql`.
+   - Para probar solo los **links de pago**, [db/pruebas/compras-links.sql](db/pruebas/compras-links.sql) crea en su lugar 17 compras: una por cada combinación de pasarela, cuotas y referido que tienen los estudiantes de G2, más los links que nadie usa y un caso sin link. Las observaciones de cada compra dicen qué link debe recibir. Las dos pruebas no pueden convivir: limpia antes de cambiar de una a otra.
+   - Para **repetir** una prueba con las mismas compras, [db/pruebas/reiniciar-envios.sql](db/pruebas/reiniciar-envios.sql) borra solo los envíos (el sistema no repite una etapa ya enviada). Antes de volver a enviar, saca a los contactos de prueba de los workflows de GHL donde sigan esperando respuesta.
    - Se activa el producto en el dashboard y se simula cada etapa, una por día para que los workflows de GHL no se crucen:
      ```powershell
      Invoke-RestMethod -Headers @{ Authorization = "Bearer TU_CRON_SECRET" } -Uri "https://APP_URL/api/cron/recordatorios?fecha=2026-11-17&producto=76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265"

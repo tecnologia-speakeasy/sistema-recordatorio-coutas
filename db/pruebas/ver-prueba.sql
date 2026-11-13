@@ -13,8 +13,11 @@ FROM recordatorios.v_cuotas_fuente f
 WHERE f.producto_id = '76ce2267-9f2f-4f2a-8d75-bd7d9f4b3265' AND f.fecha_vencimiento = DATE '2026-11-20'
 ORDER BY f.nombre;
 
--- 2. Envíos: etapa, estado, botones y clics.
-SELECT left(e.nombre, 34) AS compra, e.etapa, e.estado, e.respuesta, e.clicks,
+-- 2. Envíos: etapa, estado, link que llevó, botones y clics.
+SELECT left(e.nombre, 34) AS compra, e.etapa, e.estado,
+       e.pasarela || CASE WHEN e.referido THEN ' referido' ELSE '' END || ' ' || e.total_cuotas AS plan,
+       substring(e.link_pago FROM '(off=[^&]+|buy\.stripe\.com/[^?]+)') AS link,
+       e.respuesta, e.clicks,
        to_char(e.programado_para AT TIME ZONE 'America/Bogota', 'DD/MM HH24:MI') AS programado,
        left(e.ultimo_error, 70) AS detalle
 FROM recordatorios.envios e
