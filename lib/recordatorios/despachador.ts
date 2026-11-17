@@ -209,8 +209,10 @@ async function despacharEnvio(envio: Envio, { etapas, ajustes }: Contexto): Prom
     }
 
     // El workflow busca al estudiante en GHL por correo y el WhatsApp sale al teléfono
-    // de ese contacto en GHL, así que el teléfono de cartera es opcional.
-    const email = fuente.email?.trim() ?? "";
+    // de ese contacto en GHL, así que el teléfono de cartera es opcional. En minúsculas:
+    // el "Find Contact" del workflow no encuentra "Maria@correo.com" (el 17-nov ninguno de
+    // los correos con mayúscula recibió el WhatsApp: "Missing phone number").
+    const email = (fuente.email?.trim() ?? "").toLowerCase();
     if (!esCorreo(email)) {
       const mensaje =
         `${PREFIJO_SIN_CONTACTO}: la compra no tiene un correo válido en cartera ("${email}") y GHL busca ` +

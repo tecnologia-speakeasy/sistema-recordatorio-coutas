@@ -133,7 +133,7 @@ Al tocar un botón, el estudiante le escribe a la cuenta y se abre la **ventana 
 | `link_pago` | `https://APP_URL/p/3a7d…` | URL del botón *Pagar ahora* (link rastreado) |
 | `link_soporte` | `https://wa.me/57…` | URL del botón *Hablar con soporte* |
 | `token` | `3a7d…` | Dato que devuelven los webhooks de respuesta (ver (e)) |
-| `email` | `maria@correo.com` | Buscar el contacto (*Find Contact* por correo) |
+| `email` | `maria@correo.com` | Buscar el contacto (*Find Contact* por correo). Va siempre en minúsculas: con mayúsculas el workflow no encuentra el contacto y falla con "Missing phone number" |
 | `telefono` | `+13055551001` o vacío | Solo referencia: el WhatsApp sale al teléfono del contacto en GHL |
 | `nombre`, `concepto`, `cuota`, `total_cuotas`, `fecha_limite`, `metodo_pago`, `pasarela`, `producto`, `etapa`, `plantilla`, `envio_id` | `Cuota 2 de 4`, `20 de noviembre`… | Opcionales |
 
