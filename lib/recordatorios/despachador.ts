@@ -293,7 +293,9 @@ async function contactoEnGhl(email: string): Promise<string | null | undefined> 
 /**
  * Solo si sigue 'procesando': si llegara antes un aviso "contacto_no_encontrado"
  * del workflow (fallido), ese aviso manda. Guarda el contacto ya encontrado para
- * que el verificador no lo vuelva a buscar.
+ * que el verificador no lo vuelva a buscar. Si en un reenvío el correo ya apunta
+ * a otro contacto (soporte corrigió el contacto en GHL), se olvida la conversación
+ * del contacto anterior: si no, el verificador buscaría el mensaje donde no está.
  */
 async function marcarEnviado(
   id: string,
@@ -306,7 +308,8 @@ async function marcarEnviado(
     `UPDATE recordatorios.envios
      SET estado = 'enviado', enviado_en = now(), procesando_desde = NULL, ultimo_error = $4, simulado = $3,
          telefono_e164 = $2, ghl_message_id = NULL, entregado_en = NULL, leido_en = NULL,
-         ghl_contact_id = COALESCE($5, ghl_contact_id)
+         ghl_contact_id = COALESCE($5::text, ghl_contact_id),
+         ghl_conversation_id = CASE WHEN $5::text = ghl_contact_id THEN ghl_conversation_id END
      WHERE id = $1 AND estado = 'procesando'`,
     [id, telefono, simulado, nota, contacto ?? null],
   );

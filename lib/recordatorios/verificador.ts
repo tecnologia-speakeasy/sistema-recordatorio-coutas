@@ -23,7 +23,10 @@ export async function verificarEntregas(): Promise<number> {
      WHERE estado IN ('enviado', 'entregado')
        AND NOT simulado AND NULLIF(btrim(email), '') IS NOT NULL
        AND enviado_en BETWEEN now() - interval '72 hours' AND now() - interval '1 minute'
-     ORDER BY enviado_en
+     -- Primero los que WhatsApp aún no confirma: ahí se detectan los fallos. Los
+     -- 'entregado' solo pueden pasar a leído y no deben ocupar los cupos de una
+     -- etapa nueva (si no, el D-1 quedaría detrás de los entregados del D-3).
+     ORDER BY estado = 'entregado', enviado_en
      LIMIT $1`,
     [MAX_POR_EJECUCION],
   );

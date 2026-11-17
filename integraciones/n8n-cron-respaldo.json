@@ -1,0 +1,72 @@
+{
+  "name": "Recordatorios de cuotas · cron de respaldo",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "7,22,37,52 7-19 * * *"
+            }
+          ]
+        }
+      },
+      "id": "3a6f2c41-7d8e-4b19-a5c2-9e0d1f4b6a73",
+      "name": "Cada 15 min, 7:07 a 19:52",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://sistema-recordatorio-coutas.vercel.app/api/cron/recordatorios",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer PEGA_AQUI_EL_CRON_SECRET"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "8c1e5b7a-2f4d-4e93-b6a0-5d7c9e2f1b84",
+      "name": "Ejecutar ciclo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Cada 15 min, 7:07 a 19:52": {
+      "main": [
+        [
+          {
+            "node": "Ejecutar ciclo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota"
+  }
+}
