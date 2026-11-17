@@ -1,7 +1,7 @@
 import "server-only";
 import { apiGhlConfigurada } from "../config";
 import { consultar } from "../db";
-import { buscarContacto, buscarConversacion, mensajesWhatsapp, type MensajeGhl } from "../ghl";
+import { buscarContacto, buscarConversacion, ErrorGhl, mensajesWhatsapp, type MensajeGhl } from "../ghl";
 import { mensajeDeError } from "../utilidades";
 import { registrarEvento } from "./bitacora";
 import { errorSinContacto, marcarSinContacto } from "./interacciones";
@@ -10,6 +10,12 @@ import { ETAPA_SEGUIMIENTO, type Envio } from "./tipos";
 /** Si tras este tiempo el workflow no generó mensaje de WhatsApp, el envío se marca fallido. */
 const MINUTOS_SIN_MENSAJE = 120;
 const MAX_POR_EJECUCION = 150;
+/**
+ * enviado_en se guarda cuando responde el webhook (máximo 20 s de espera), así que el
+ * mensaje del workflow no puede ser más antiguo que esto. Un mensaje anterior es de otro
+ * intento (p. ej. uno manual desde GHL justo antes del reenvío) y no debe tomarse.
+ */
+const SEGUNDOS_ANTES_DEL_ENVIO = 30;
 
 /**
  * Lee en GHL el estado real del mensaje de WhatsApp de los envíos recientes
@@ -43,14 +49,46 @@ export async function verificarEntregas(): Promise<number> {
   return cambios;
 }
 
+interface Lectura {
+  contacto: string | null;
+  conversacion: string | null;
+  mensaje: MensajeGhl | null;
+}
+
+/** Conversación y mensaje del envío dentro de un contacto (la conversación guardada, si la hay). */
+async function leer(envio: Envio, contacto: string | null, conversacionGuardada: string | null): Promise<Lectura> {
+  const conversacion = contacto ? (conversacionGuardada ?? (await buscarConversacion(contacto))) : null;
+  const mensaje = contacto && conversacion ? await localizarMensaje(envio, contacto, conversacion) : null;
+  return { contacto, conversacion, mensaje };
+}
+
+/** 4xx (no 429): el contacto o la conversación guardados ya no existen en GHL. */
+const recursoInexistente = (error: unknown) =>
+  error instanceof ErrorGhl && error.estadoHttp >= 400 && error.estadoHttp < 500 && error.estadoHttp !== 429;
+
 async function verificarEnvio(envio: Envio): Promise<boolean> {
   // El workflow busca el contacto por correo (sin crearlo); aquí igual, sin modificarlo.
-  const contacto = envio.ghl_contact_id ?? (await buscarContacto(envio.email!.trim()));
-  const conversacion = contacto ? (envio.ghl_conversation_id ?? (await buscarConversacion(contacto))) : null;
-  const mensaje = contacto && conversacion ? await localizarMensaje(envio, contacto, conversacion) : null;
+  const email = envio.email!.trim();
+  let lectura: Lectura;
+  try {
+    lectura = await leer(envio, envio.ghl_contact_id ?? (await buscarContacto(email)), envio.ghl_conversation_id);
+  } catch (error) {
+    // Soporte unió o borró el contacto guardado en GHL: se vuelve a buscar por correo.
+    if (!envio.ghl_contact_id || !recursoInexistente(error)) throw error;
+    lectura = await leer(envio, await buscarContacto(email), null);
+  }
+
+  const minutos = (Date.now() - envio.enviado_en!.getTime()) / 60_000;
+  // Antes de dar por fallido un envío sin mensaje, confirmar que el correo sigue en
+  // ese contacto: si soporte unió o corrigió contactos en GHL, el mensaje quedó en el
+  // contacto que hoy tiene el correo.
+  if (!lectura.mensaje && lectura.contacto && envio.estado === "enviado" && minutos > MINUTOS_SIN_MENSAJE) {
+    const actual = await buscarContacto(email);
+    if (actual && actual !== lectura.contacto) lectura = await leer(envio, actual, null);
+  }
+  const { contacto, conversacion, mensaje } = lectura;
 
   if (!mensaje) {
-    const minutos = (Date.now() - envio.enviado_en!.getTime()) / 60_000;
     if (envio.estado === "enviado" && minutos > MINUTOS_SIN_MENSAJE) {
       if (!contacto) {
         await marcarSinContacto(envio.id, errorSinContacto(envio.email), {
@@ -109,7 +147,7 @@ async function localizarMensaje(envio: Envio, contacto: string, conversacion: st
     ).map((f) => f.ghl_message_id),
   );
 
-  const desde = envio.enviado_en!.getTime() - 60_000;
+  const desde = envio.enviado_en!.getTime() - SEGUNDOS_ANTES_DEL_ENVIO * 1000;
   return (
     mensajes
       .filter((m) => m.direction === "outbound" && !asignados.has(m.id) && Date.parse(m.dateAdded) >= desde)
