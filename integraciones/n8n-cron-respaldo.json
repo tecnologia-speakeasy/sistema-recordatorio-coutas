@@ -7,13 +7,17 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "7,22,37,52 7-19 * * *"
+              "expression": "30 8 * * *"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "0,30 9-19 * * *"
             }
           ]
         }
       },
       "id": "3a6f2c41-7d8e-4b19-a5c2-9e0d1f4b6a73",
-      "name": "Cada 15 min, 7:07 a 19:52",
+      "name": "Cada 30 min, 8:30 a 19:30",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -53,7 +57,7 @@
     }
   ],
   "connections": {
-    "Cada 15 min, 7:07 a 19:52": {
+    "Cada 30 min, 8:30 a 19:30": {
       "main": [
         [
           {

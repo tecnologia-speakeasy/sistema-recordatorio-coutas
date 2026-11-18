@@ -17,6 +17,19 @@ const opcional = z
   .optional()
   .transform((v) => v || undefined);
 
+/** "8", "8:30" u "08:30" (vacío = porDefecto) → minutos desde la medianoche (0–1440). */
+const horaDelDia = (porDefecto: string) =>
+  z
+    .string()
+    .trim()
+    .regex(/^(\d{1,2}(:[0-5]\d)?)?$/, 'usa H o H:MM, por ejemplo "8" u "8:30"')
+    .optional()
+    .transform((v) => {
+      const [horas, minutos = "0"] = (v || porDefecto).split(":");
+      return Number(horas) * 60 + Number(minutos);
+    })
+    .refine((m) => m <= 24 * 60, "la hora debe estar entre 0:00 y 24:00");
+
 const esquemaGeneral = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL es obligatoria"),
   // URL pública de esta app: base del link rastreado que recibe el estudiante (/p/<token>).
@@ -25,8 +38,9 @@ const esquemaGeneral = z.object({
   // Solo se usa si el país de la compra no se reconoce y el número no trae indicativo.
   TELEFONO_CODIGO_PAIS: z.string().regex(/^\d{1,3}$/).default("57"),
   // Ventana horaria (zona APP_TIMEZONE) en la que el cron puede despachar: [inicio, fin).
-  HORA_INICIO_ENVIO: z.coerce.number().int().min(0).max(23).default(8),
-  HORA_FIN_ENVIO: z.coerce.number().int().min(1).max(24).default(20),
+  // Se escribe "8" u "8:30"; ya validada queda en minutos desde la medianoche.
+  HORA_INICIO_ENVIO: horaDelDia("8"),
+  HORA_FIN_ENVIO: horaDelDia("20"),
   // Tiempo máximo que una ejecución dedica a despachar (debe ser < maxDuration del endpoint).
   PRESUPUESTO_EJECUCION_SEG: z.coerce.number().int().min(10).default(240),
   // Separación mínima entre dos envíos al mismo contacto (mismo correo), para que la

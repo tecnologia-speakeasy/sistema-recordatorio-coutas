@@ -9,7 +9,7 @@ Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin S
 ## Cómo funciona
 
 ```
-                 ┌──────────── cron (cada 15 min, 7–19:45 h) ───────────┐
+                 ┌──────────── cron (cada 30 min, 8–19:30 h) ───────────┐
                  ▼                                                       │
   GET /api/cron/recordatorios  (Bearer CRON_SECRET)                      │
         │                                                                │
@@ -30,7 +30,7 @@ Stack: Next.js 16 (App Router, Cache Components, `proxy.ts`), `pg`, `zod`. Sin S
 
 ### ¿Se necesita un cron?
 
-Sí. Lo recomendable es **cada 15 minutos (o cada hora) dentro de la ventana de envío**:
+Sí. Lo recomendable es **cada 15 o 30 minutos (o cada hora) dentro de la ventana de envío** (hoy: cada 30 minutos, envíos desde las 8:30):
 
 - el día 17 salen todos los D-3 de la generación a la vez, y si no alcanzan en una ejecución la siguiente continúa;
 - los seguimientos salen 3 h después de cada clic, así que hace falta revisar a lo largo del día;
@@ -270,22 +270,22 @@ El estado cambia solo, en la siguiente ejecución después de que el pago aparez
 
 El endpoint acepta `GET` o `POST` con `Authorization: Bearer $CRON_SECRET`.
 
-- **Vercel**: [vercel.json](vercel.json) lo programa cada 15 minutos de 7:00 a 19:45 (hora de Bogotá); el sistema envía entre `HORA_INICIO_ENVIO` (7) y `HORA_FIN_ENVIO` (20). Define `CRON_SECRET` en el proyecto y Vercel enviará el header automáticamente. Si tu plan solo permite ejecuciones diarias, usa un programador externo.
+- **Vercel**: [vercel.json](vercel.json) lo programa cada 30 minutos de 8:00 a 19:30 (hora de Bogotá); el sistema envía entre `HORA_INICIO_ENVIO` (`8:30`) y `HORA_FIN_ENVIO` (`20`). Ambas aceptan hora entera (`8`) u hora y minutos (`8:30`). La ejecución de las 8:00 solo planifica y verifica: los mensajes empiezan a salir a las 8:30. Define `CRON_SECRET` en el proyecto y Vercel enviará el header automáticamente. Si tu plan solo permite ejecuciones diarias, usa un programador externo.
 
-  Para cambiar la frecuencia, reemplaza la línea `"schedule"` de [vercel.json](vercel.json) por una de estas (las horas `0,12-23` están en UTC y equivalen a 7:00–19:45 en Bogotá; si cambias la hora de inicio, cambia también `HORA_INICIO_ENVIO`). `vercel.json` no admite comentarios: si le agregas uno, el deploy falla.
+  Para cambiar la frecuencia, reemplaza la línea `"schedule"` de [vercel.json](vercel.json) por una de estas (las horas están en UTC: `0,13-23` equivale a 8:00–19:30 en Bogotá y `0,12-23` a 7:00–19:45; si cambias la hora de inicio, cambia también `HORA_INICIO_ENVIO`). `vercel.json` no admite comentarios: si le agregas uno, el deploy falla.
 
   | Frecuencia | Línea para pegar | Seguimiento sale tras el clic |
   |---|---|---|
-  | Cada 15 minutos (actual) | `"schedule": "*/15 0,12-23 * * *"` | entre 3 h y 3 h 15 min |
-  | Cada 30 minutos | `"schedule": "*/30 0,12-23 * * *"` | entre 3 h y 3 h 30 min |
-  | Cada hora | `"schedule": "0 0,12-23 * * *"` | entre 3 h y 4 h |
+  | Cada 15 minutos | `"schedule": "*/15 0,13-23 * * *"` | entre 3 h y 3 h 15 min |
+  | Cada 30 minutos (actual) | `"schedule": "*/30 0,13-23 * * *"` | entre 3 h y 3 h 30 min |
+  | Cada hora | `"schedule": "0 0,13-23 * * *"` | entre 3 h y 4 h |
 
   El cambio se aplica con el siguiente deploy (commit y push). Se confirma en Vercel → *Settings → Cron Jobs*.
 - **VPS / externo** (crontab, cron-job.org, GitHub Actions):
 
   ```cron
   CRON_TZ=America/Bogota
-  */15 8-19 * * * curl -fsS -m 310 -H "Authorization: Bearer $CRON_SECRET" https://APP_URL/api/cron/recordatorios > /dev/null
+  0,30 8-19 * * * curl -fsS -m 310 -H "Authorization: Bearer $CRON_SECRET" https://APP_URL/api/cron/recordatorios > /dev/null
   ```
 
 Respuestas: `200` correcto, `500` con detalle en `errores`, `409` si ya hay otra ejecución en curso.

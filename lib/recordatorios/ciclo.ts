@@ -105,9 +105,15 @@ async function cicloSinBloqueo({ origen, fecha, producto, forzarVentana }: Opcio
   return resumen;
 }
 
+/** HORA_INICIO_ENVIO y HORA_FIN_ENVIO ya vienen en minutos desde la medianoche. */
 function dentroDeVentana({ APP_TIMEZONE, HORA_INICIO_ENVIO, HORA_FIN_ENVIO }: ReturnType<typeof configGeneral>) {
-  const hora = Number(
-    new Intl.DateTimeFormat("en-US", { timeZone: APP_TIMEZONE, hour: "numeric", hourCycle: "h23" }).format(new Date()),
-  );
-  return hora >= HORA_INICIO_ENVIO && hora < HORA_FIN_ENVIO;
+  const partes = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const valor = (tipo: "hour" | "minute") => Number(partes.find((p) => p.type === tipo)?.value ?? 0);
+  const minutos = valor("hour") * 60 + valor("minute");
+  return minutos >= HORA_INICIO_ENVIO && minutos < HORA_FIN_ENVIO;
 }
