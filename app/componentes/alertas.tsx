@@ -1,19 +1,21 @@
 import Link from "next/link";
 import type { Alerta, ClaveAlerta, FiltrosEnvios } from "@/lib/recordatorios/consultas";
 import { formatearFechaCorta, formatearFechaHora } from "@/lib/utilidades";
+import { BotonCorregido } from "./boton-corregido";
 
 const MAX_FILAS = 50;
 
 const TEXTOS: Record<ClaveAlerta, { titulo: string; descripcion: string; urgente?: boolean }> = {
   whatsapp_fallido: {
     titulo: "WhatsApp que fallaron",
-    descripcion: "No llegaron: falta el link, error de GHL o de WhatsApp (número sin WhatsApp…). Se pueden reenviar.",
+    descripcion:
+      "No llegaron: falta el link, error de GHL o de WhatsApp (número sin WhatsApp…). Reenvía, o marca «Corregido» cuando arregles el contacto en GHL: sale de la lista y la siguiente etapa debería llegar.",
     urgente: true,
   },
   sin_contacto_ghl: {
     titulo: "Sin contacto en GHL",
     descripcion:
-      "GHL no encontró su correo y el WhatsApp no salió. Crea el contacto en GHL (o corrige el correo en cartera) y reenvía.",
+      "GHL no encontró su correo y el WhatsApp no salió. Crea el contacto en GHL (o corrige el correo en cartera) y reenvía, o márcalo «Corregido».",
     urgente: true,
   },
   reporto_sin_registro: {
@@ -51,6 +53,7 @@ export function Alertas({ alertas, filtros, zona }: { alertas: Alerta[]; filtros
         {alertas.map(({ clave, filas }) => {
           const { titulo, descripcion, urgente } = TEXTOS[clave];
           const alerta = urgente && filas.length > 0;
+          const corregible = clave === "whatsapp_fallido" || clave === "sin_contacto_ghl";
           return (
             <details
               key={clave}
@@ -80,7 +83,15 @@ export function Alertas({ alertas, filtros, zona }: { alertas: Alerta[]; filtros
                         {f.etapa && ` · ${f.etapa}`}
                         {f.cuando && ` · ${formatearFechaHora(f.cuando, zona)}`}
                       </span>
+                      {f.corregido_en && (
+                        <span className="mt-0.5 block font-semibold text-red-800">
+                          Se corrigió en {f.corregido_en} y volvió a fallar: revisa otra vez el contacto en GHL.
+                        </span>
+                      )}
                       {f.detalle && <span className="mt-0.5 block text-neutral-800">{f.detalle}</span>}
+                      {corregible && (
+                        <BotonCorregido envio={{ id: f.envio_id, estado: "fallido" }} />
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -88,7 +99,7 @@ export function Alertas({ alertas, filtros, zona }: { alertas: Alerta[]; filtros
               {filas.length > MAX_FILAS && (
                 <p className="mt-2 text-xs text-neutral-600">Se muestran {MAX_FILAS} de {filas.length}.</p>
               )}
-              {(clave === "whatsapp_fallido" || clave === "sin_contacto_ghl") && filas.length > 0 && (
+              {corregible && filas.length > 0 && (
                 <Link
                   href={`/?${new URLSearchParams({ desde: filtros.desde, hasta: filtros.hasta, estado: "fallido" })}`}
                   className="mt-2 inline-block text-xs font-semibold text-morado underline"

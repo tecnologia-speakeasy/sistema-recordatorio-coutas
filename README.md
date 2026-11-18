@@ -321,7 +321,7 @@ Protegido con HTTP Basic (`DASHBOARD_USUARIO` / `DASHBOARD_CLAVE`). Las server a
   - **Tocó «Realizar pago» y no abrió el link**.
   - **Abrió el link y no ha pagado**: más de 3 h después del clic.
   - **Venció sin pagar**: recibió recordatorios y la cuota sigue sin pago.
-- **Tabla** con filtros por fecha, estado, etapa y búsqueda (nombre, teléfono, correo). **Reenviar** por fila y **Reenviar fallidos del filtro** (máx. 200 por acción).
+- **Tabla** con filtros por fecha, estado, etapa y búsqueda (nombre, teléfono, correo). **Reenviar** y **Corregido** por fila, y **Reenviar fallidos del filtro** (máx. 200 por acción). El botón **Corregido** también está en las listas de fallidos de *Requieren atención* y en el detalle del envío.
 - **Detalle** `/envios/:id`: datos, link rastreado, respuesta y bitácora completa (intentos, respuestas de GHL, estados de WhatsApp, clics).
 - **Etapas**: URL del webhook de cada workflow, activar/pausar etapas (incluido el seguimiento) y link del chat de soporte.
 - **Productos y links de pago**: activar generaciones y editar sus 10 links.
@@ -336,6 +336,7 @@ Protegido con HTTP Basic (`DASHBOARD_USUARIO` / `DASHBOARD_CLAVE`). Las server a
 | enviado | Webhook del workflow disparado | Sí (con confirmación) |
 | entregado / leído | Confirmado por WhatsApp vía GHL (o respondió un botón) | No |
 | fallido | Error de datos, de GHL o de WhatsApp (`ultimo_error`) | Sí |
+| corregido | Fallido cuyo contacto el equipo ya arregló en GHL (botón **Corregido**; **Quitar corregido** lo devuelve a fallido). El mensaje de esa etapa no llegó, pero sale de *Requieren atención* y de *Reenviar fallidos del filtro*, y la siguiente etapa debería llegar. Si esa etapa vuelve a fallar, su alerta dice "Se corrigió en D-3 y volvió a fallar" | Sí |
 | omitido | Pagada, reportó el pago, ya no está en cartera o no salió a tiempo | Sí |
 
 ---

@@ -11,7 +11,12 @@ export function TarjetasKpi({ kpis }: { kpis: Kpis }) {
     { titulo: "Envíos en el rango", valor: kpis.total, nota: `${e.pendiente + e.procesando} en cola` },
     { titulo: "Enviados a GHL", valor: enviados, nota: `${porcentaje(entregados, enviados)} entregados` },
     { titulo: "Leídos", valor: e.leido, nota: `${porcentaje(e.leido, enviados)} de los enviados` },
-    { titulo: "Fallidos", valor: e.fallido, nota: "Reenviables desde la tabla", alerta: e.fallido > 0 },
+    {
+      titulo: "Fallidos",
+      valor: e.fallido,
+      nota: e.corregido ? `Reenviables desde la tabla · ${e.corregido} ya corregidos` : "Reenviables desde la tabla",
+      alerta: e.fallido > 0,
+    },
     { titulo: "Omitidos", valor: e.omitido, nota: "Pagadas, sin datos o fuera de fecha" },
     {
       titulo: "Clic en el link de pago",

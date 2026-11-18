@@ -57,6 +57,32 @@ export async function reenviarEnvio(_previo: EstadoAccion, datos: FormData): Pro
   });
 }
 
+/**
+ * Fallido → corregido (el equipo arregló el contacto en GHL; la siguiente etapa debería
+ * llegar) o, con deshacer, corregido → fallido. No envía nada ni borra el error.
+ */
+export async function marcarCorregido(_previo: EstadoAccion, datos: FormData): Promise<EstadoAccion> {
+  return ejecutar(async () => {
+    const { id, deshacer } = z
+      .object({ id: z.string().regex(/^\d+$/), deshacer: z.literal("si").optional() })
+      .parse(Object.fromEntries(datos));
+    const [antes, despues] = deshacer ? ["corregido", "fallido"] : ["fallido", "corregido"];
+    const fila = await consultarUno<{ envio_id: string }>(
+      `WITH e AS (
+         UPDATE recordatorios.envios SET estado = $3::recordatorios.estado_envio
+         WHERE id = $1 AND estado = $2::recordatorios.estado_envio
+         RETURNING id
+       )
+       INSERT INTO recordatorios.eventos (envio_id, tipo, detalle)
+       SELECT id, 'corregido', jsonb_build_object('estado_anterior', $2::text, 'estado_nuevo', $3::text) FROM e
+       RETURNING envio_id`,
+      [id, antes, despues],
+    );
+    if (!fila) return { ok: false, mensaje: `El envío ya no está ${antes}.` };
+    return { ok: true, mensaje: deshacer ? "Volvió a fallido." : "Marcado como corregido." };
+  });
+}
+
 const esquemaFiltros = z.object({
   desde: z.iso.date(),
   hasta: z.iso.date(),

@@ -255,6 +255,8 @@ export interface FilaAlerta {
   etapa: string | null;
   detalle: string | null;
   cuando: Date | null;
+  /** Solo en fallidos: etapas de la misma cuota que ya se marcaron como corregidas. */
+  corregido_en?: string | null;
 }
 
 export type ClaveAlerta =
@@ -297,7 +299,11 @@ export async function alertas(desde: string, hasta: string, hoy: string): Promis
   const [fallidos, cuotas] = await Promise.all([
     consultar<FilaAlerta>(
       `SELECT e.id AS envio_id, e.nombre, COALESCE(e.telefono_e164, e.telefono) AS telefono, e.email, e.concepto,
-              e.fecha_vencimiento, e.etapa, e.ultimo_error AS detalle, e.actualizado_en AS cuando
+              e.fecha_vencimiento, e.etapa, e.ultimo_error AS detalle, e.actualizado_en AS cuando,
+              (SELECT string_agg(p.etapa, ', ' ORDER BY p.fecha_programada)
+               FROM recordatorios.envios p
+               WHERE p.cuota_id = e.cuota_id AND p.fecha_vencimiento = e.fecha_vencimiento
+                 AND p.estado = 'corregido') AS corregido_en
        FROM recordatorios.envios e
        WHERE e.estado = 'fallido' AND e.fecha_programada BETWEEN $1::date AND $2::date
        ORDER BY e.actualizado_en DESC`,

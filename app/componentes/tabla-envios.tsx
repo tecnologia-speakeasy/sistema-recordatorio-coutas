@@ -4,6 +4,7 @@ import { TAMANO_PAGINA, type FiltrosEnvios } from "@/lib/recordatorios/consultas
 import { ESTADOS_REENVIABLES, PASARELAS, RESPUESTAS, type Envio } from "@/lib/recordatorios/tipos";
 import { formatearFechaCorta, formatearFechaHora } from "@/lib/utilidades";
 import { BotonAccion } from "./boton-accion";
+import { BotonCorregido } from "./boton-corregido";
 import { InsigniaEstado } from "./insignia-estado";
 
 interface Props {
@@ -98,6 +99,7 @@ export function TablaEnvios({ filas, total, filtros, zona }: Props) {
                         }
                       />
                     )}
+                    <BotonCorregido envio={e} />
                   </div>
                 </td>
               </tr>

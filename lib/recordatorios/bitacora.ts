@@ -13,6 +13,7 @@ export type TipoEvento =
   | "respuesta"
   | "sin_contacto"
   | "reenvio_manual"
+  | "corregido"
   | "recuperado";
 
 export async function registrarEvento(envioId: string, tipo: TipoEvento, detalle?: unknown): Promise<void> {

@@ -7,6 +7,7 @@ const ESTILOS: Record<EstadoEnvio, string> = {
   entregado: "bg-emerald-100 text-emerald-900 ring-emerald-300",
   leido: "bg-emerald-700 text-white ring-emerald-700",
   fallido: "bg-red-100 text-red-800 ring-red-300",
+  corregido: "bg-teal-100 text-teal-900 ring-teal-300",
   omitido: "bg-amber-100 text-amber-900 ring-amber-300",
 };
 

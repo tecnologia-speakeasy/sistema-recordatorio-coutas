@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { reenviarEnvio } from "@/app/acciones";
 import { BotonAccion } from "@/app/componentes/boton-accion";
+import { BotonCorregido } from "@/app/componentes/boton-corregido";
 import { InsigniaEstado } from "@/app/componentes/insignia-estado";
 import { configGeneral } from "@/lib/config";
 import { eventosDeEnvio, obtenerEnvio } from "@/lib/recordatorios/consultas";
@@ -97,16 +98,24 @@ async function Contenido({ params }: { params: PageProps<"/envios/[id]">["params
               <span className="text-xs text-neutral-600">Envío #{envio.id}</span>
             </div>
           </div>
-          {ESTADOS_REENVIABLES.includes(envio.estado) && (
-            <BotonAccion
-              accion={reenviarEnvio}
-              campos={{ id: envio.id }}
-              etiqueta={envio.estado === "pendiente" ? "Enviar ahora" : "Reenviar"}
-              etiquetaPendiente="Enviando…"
-              confirmar={envio.estado === "enviado" ? "Este recordatorio ya se envió. ¿Reenviarlo de todos modos?" : undefined}
-            />
-          )}
+          <div className="flex flex-wrap items-start gap-2">
+            <BotonCorregido envio={envio} variante="secundario" />
+            {ESTADOS_REENVIABLES.includes(envio.estado) && (
+              <BotonAccion
+                accion={reenviarEnvio}
+                campos={{ id: envio.id }}
+                etiqueta={envio.estado === "pendiente" ? "Enviar ahora" : "Reenviar"}
+                etiquetaPendiente="Enviando…"
+                confirmar={envio.estado === "enviado" ? "Este recordatorio ya se envió. ¿Reenviarlo de todos modos?" : undefined}
+              />
+            )}
+          </div>
         </div>
+        {envio.estado === "corregido" && (
+          <p className="mt-4 rounded-2xl bg-teal-50 p-3 text-sm text-teal-900 ring-1 ring-teal-200">
+            El equipo corrigió el contacto en GHL. Este mensaje no llegó; la siguiente etapa debería llegar.
+          </p>
+        )}
         {envio.ultimo_error && (
           <p className="mt-4 rounded-2xl bg-red-50 p-3 text-sm text-red-900 ring-1 ring-red-200">{envio.ultimo_error}</p>
         )}

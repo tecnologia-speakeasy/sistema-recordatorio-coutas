@@ -5,6 +5,7 @@ export const ESTADOS_ENVIO = [
   "entregado",
   "leido",
   "fallido",
+  "corregido",
   "omitido",
 ] as const;
 
@@ -17,11 +18,12 @@ export const ETIQUETAS_ESTADO: Record<EstadoEnvio, string> = {
   entregado: "Entregado",
   leido: "Leído",
   fallido: "Fallido",
+  corregido: "Corregido",
   omitido: "Omitido",
 };
 
 /** Estados desde los que se permite reenviar manualmente. */
-export const ESTADOS_REENVIABLES: readonly EstadoEnvio[] = ["fallido", "omitido", "enviado", "pendiente"];
+export const ESTADOS_REENVIABLES: readonly EstadoEnvio[] = ["fallido", "corregido", "omitido", "enviado", "pendiente"];
 
 /** Etapa que se crea con el clic en el link de pago (plantilla "¿pudiste pagar?"). */
 export const ETAPA_SEGUIMIENTO = "SEG";
